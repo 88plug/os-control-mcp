@@ -42,9 +42,16 @@ the host's existing systemd/D-Bus tooling.
 - **`os_resources`** — load, `free -h`, `df -h`, optional per-`unit` accounting.
 - **`os_processes`** — top by `by`=cpu|mem, `limit`, `pattern`.
 - **`os_pressure`** — PSI from `/proc/pressure/{cpu,memory,io}` (some/full avg10/60/300).
-- **`os_net`** — `ss`: listening sockets + owning process; `summary=true` → `ss -s`.
+- **`os_net`** — `op`=`sockets` (`ss`; `summary`/`listening`/`pattern`) · `addr` · `links` · `routes` (`ip`) · `wifi` (nmcli/iw) · `nm` (NetworkManager devices + active connections).
+- **`os_disk`** — `op`=`usage` (`df`) · `du` (largest dirs under `path`, `depth`, sorted) · `blocks` (`lsblk`) · `mounts` (`findmnt`).
+- **`os_containers`** — Docker/Podman: `op`=`ps` (`all`) · `logs` (`name`,`lines`,`since`) · `inspect` · `stats` · `images` · `compose`. `engine` auto-detected.
+- **`os_hardware`** — `op`=`summary` · `cpu` (lscpu) · `pci` (lspci; `verbose`) · `usb` (lsusb) · `gpu` (nvidia-smi + PCI display + `/sys/class/drm`).
 - **`os_sensors`** — `/sys/class/thermal` temps; `full=true` also runs `sensors`.
 - **`os_session`** — logind `list-sessions`/`list-users`/`session-status`/`inhibitors`.
+
+> The observe set is data-driven: the container, disk, network-config, and GPU
+> tools were added by mining real Claude Code + opencode session logs for the
+> OS-observation commands the AI actually reached for (Docker was the #1 by far).
 
 ### Act (guarded)
 - **`os_service`** — `start|stop|restart|reload|try-restart|enable|disable|mask|`
@@ -62,21 +69,22 @@ the host's existing systemd/D-Bus tooling.
 - **`os_notify`** — desktop notification to the logged-in user.
 - **`os_reload`** — hot-reload the server in place.
 
-## Safety model
+## Safety model — human-in-the-loop
 
-Three layers + an audit trail, by design:
+Destructive actions (severing a service, power, D-Bus/machine *writes*) are gated
+for a **human's** approval, not the model's:
 
-| Layer | Applies to | Bypass |
+| Layer | Applies to | Resolution |
 |---|---|---|
-| **Hard floor** | severing the agent's absolute substrate — `dbus`, `dbus-broker`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target`, `sysinit.target` | **none** (refused even with `force`) |
-| **Self-preservation** | severing systemd actions on units the agent depends on — `sshd`, `NetworkManager`/networkd, `tailscaled`, `user@…` session, `goosed`, … | `force=true` |
-| **Power confirm** | `os_power` (irreversible) | `confirm=true` |
-| **Writes** | `os_dbus set-property`/`call`, `os_time`/`os_hostname`/`os_locale` writes | `force=true` |
+| **Hard floor** | severing the absolute substrate — `dbus`, `dbus-broker`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target`, `sysinit.target` | **refused always** (even with `force`) |
+| **Human approval (elicitation)** | every destructive action, when the client supports MCP elicitation | server sends `elicitation/create`; runs only if the **human accepts**. Model `force`/`confirm` is **ignored** — human is the authority |
+| **Flag fallback** | same actions, when the client can't elicit | `force`/`confirm` flags; severing a unit the agent stands on (`sshd`, `NetworkManager`, `tailscaled`, session, `goosed`) still needs `force`. `OSCTL_REQUIRE_HUMAN=1` disables this fallback entirely |
 | **Preview** | any mutating tool | `dry_run=true` returns the exact command, runs nothing |
 
-The self-preservation guard is the analog of screen-mcp's user-takeover guard —
-*don't saw off the branch you're sitting on.* Every mutation is appended to
-`$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
+When elicitation is available the human is the sole authority — a declined prompt
+never executes (the analog of screen-mcp's user-takeover guard: *don't saw off the
+branch you're sitting on*). Every mutation is appended — with its approval path
+(human vs flag) — to `$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
 
 ## Privilege
 

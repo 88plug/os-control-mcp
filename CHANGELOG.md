@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.6.25
+
+Human-in-the-loop gating + data-driven observe tools (18 → 21 tools).
+
+- **Human-in-the-loop approval.** Destructive actions (severing a service, power,
+  D-Bus/machine writes) now ask a **human** via MCP **elicitation**
+  (`elicitation/create`) when the client supports it — and run only if the human
+  accepts. The model's `force`/`confirm` flags are **ignored** when a human channel
+  exists (the human is the authority, not the model); they remain the fallback only
+  for clients without elicitation. New `OSCTL_REQUIRE_HUMAN=1` forbids the flag
+  fallback entirely (no elicitation → no mutation). The hard floor stays
+  unbypassable. Audit log now records the approval path (human vs flag).
+- **New read-only observe tools**, chosen by mining real Claude Code + opencode
+  session logs for the OS-observation commands the AI actually ran:
+  - **`os_containers`** — Docker/Podman ps/logs/inspect/stats/images/compose (the
+    single most-used host observation in the logs by a wide margin).
+  - **`os_disk`** — `df` usage, `du` (largest dirs, sorted), `lsblk`, mounts.
+  - **`os_hardware`** — cpu/pci/usb + **gpu** (nvidia-smi + PCI display + DRM).
+  - **`os_net`** expanded beyond sockets: `ip` addr/links/routes, wifi, NetworkManager.
+- Fix: `os_time`/`os_locale` `list-*` ops are reads and are no longer gated.
+
 ## 2026.6.24
 
 Capability + safety expansion (10 → 18 tools).

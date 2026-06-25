@@ -30,7 +30,7 @@ Design:
 """
 import sys, os, json, time, shutil, subprocess, shlex, glob
 
-__version__ = "2026.6.24"
+__version__ = "2026.6.25"
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -128,6 +128,75 @@ def is_floor(unit):
     return (unit or "") in CRITICAL_FLOOR
 
 # --------------------------------------------------------------------------- #
+# Human-In-the-Loop — a HUMAN approves destructive actions via MCP elicitation,
+# not the model self-setting force/confirm. The flags are only the fallback for
+# clients with no elicitation channel.
+# --------------------------------------------------------------------------- #
+ELICIT_OK = False  # set True at initialize when the client declares elicitation capability
+REQUIRE_HUMAN = os.environ.get("OSCTL_REQUIRE_HUMAN") == "1"
+_elicit_seq = [9000]
+
+def elicit(message):
+    """Ask the human via MCP elicitation/create. Returns 'accept' | 'decline' |
+    'cancel', or None when the client has no elicitation capability."""
+    if not ELICIT_OK:
+        return None
+    _elicit_seq[0] += 1
+    rid = f"osctl-elicit-{_elicit_seq[0]}"
+    req = {"jsonrpc": "2.0", "id": rid, "method": "elicitation/create",
+           "params": {"message": message,
+                      "requestedSchema": {"type": "object", "required": ["approve"],
+                          "properties": {"approve": {"type": "boolean",
+                              "description": "Approve this action on the host?"}}}}}
+    sys.stdout.write(json.dumps(req) + "\n"); sys.stdout.flush()
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            return "cancel"
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except Exception:
+            continue
+        if msg.get("id") != rid:
+            continue  # ignore anything that isn't our elicitation response
+        if "error" in msg:
+            return "decline"
+        res = msg.get("result") or {}
+        if res.get("action") == "accept":
+            return "accept" if (res.get("content") or {}).get("approve", True) else "decline"
+        return res.get("action") or "decline"
+
+def approval_path():
+    return "human" if ELICIT_OK else ("require-human" if REQUIRE_HUMAN else "flag")
+
+def require_human(desc, flag_name, args, *, floor=False, headless_allow=False):
+    """The HIL gate. Returns None to proceed, or an err(...) to block.
+      * hard floor      -> always blocked (no override).
+      * elicitation on  -> the HUMAN decides; the model's flag is IGNORED (authority).
+      * elicitation off -> OSCTL_REQUIRE_HUMAN blocks; else proceed if headless_allow
+                           (low self-risk, nobody to ask) or the flag is set."""
+    if floor:
+        return err(f"REFUSED (hard floor): {desc}. Never permitted — not bypassable.")
+    verdict = elicit(f"os-control-mcp needs human approval:\n\n  {desc}\n\nApprove?")
+    if verdict == "accept":
+        return None
+    if verdict in ("decline", "cancel"):
+        return err(f"DENIED by human: {desc}")
+    # verdict is None -> client has no elicitation channel
+    if REQUIRE_HUMAN:
+        return err(f"REFUSED: {desc} requires human approval, but this client has no MCP "
+                   f"elicitation capability and OSCTL_REQUIRE_HUMAN=1 (no flag fallback).")
+    if headless_allow:
+        return None
+    if args.get(flag_name):
+        return None
+    return err(f"REFUSED: {desc}. No human-approval channel (client lacks MCP elicitation); "
+               f"pass {flag_name}=true to proceed, or dry_run=true to preview.")
+
+# --------------------------------------------------------------------------- #
 # systemd
 # --------------------------------------------------------------------------- #
 def _sc(scope, privileged):
@@ -195,7 +264,6 @@ _NOUNIT_ACTIONS = {"daemon-reload", "daemon-reexec"}
 def h_service(a):
     action = a.get("action")
     scope = a.get("scope", "system")
-    force = bool(a.get("force"))
     dry = bool(a.get("dry_run"))
     if not action:
         return err("os_service requires `action`")
@@ -206,25 +274,29 @@ def h_service(a):
         if not u:
             return err(f"os_service `{action}` requires `unit` (string or list)")
         units = u if isinstance(u, list) else [u]
-    # guards (per unit)
-    for unit in units:
-        if action in SEVERING_ACTIONS and is_floor(unit):
+    sever = action in SEVERING_ACTIONS
+    for unit in units:                       # hard floor first — never overridable
+        if sever and is_floor(unit):
             return err(f"REFUSED (hard floor): `{action} {unit}` would sever the agent's "
-                       f"absolute substrate. This is NOT bypassable with force.")
-        if action in SEVERING_ACTIONS and is_protected(unit) and not force:
-            return err(f"REFUSED: `{action} {unit}` targets a unit the agent depends on "
-                       f"(self-preservation guard). Could sever your own bus/session/network/"
-                       f"remote access. Pass force=true if certain.")
+                       f"absolute substrate. Never permitted — not bypassable.")
     base, gerr = _sc(scope, True)
     if gerr:
         return err(gerr)
     cmd = base + [action] + units
     if dry:
         return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
+    if sever:                                # HIL gate on every severing action
+        protected = any(is_protected(u) for u in units)
+        risk = ("a unit the agent DEPENDS ON (bus/session/network/remote access)"
+                if protected else "a running service")
+        block = require_human(f"{action} {' '.join(units)} on {os.uname().nodename} — {risk}",
+                              "force", a, headless_allow=not protected)
+        if block:
+            return block
     rc, out, e = run(cmd, timeout=60)
     msg = (out + e).strip()
-    outcome = f"rc={rc} {msg[:160]}"
-    audit("os_service", {"action": action, "units": units, "scope": scope, "force": force}, outcome)
+    audit("os_service", {"action": action, "units": units, "scope": scope,
+                         "approval": approval_path()}, f"rc={rc} {msg[:160]}")
     if rc != 0:
         return err(f"{action} {' '.join(units)} failed (rc {rc}): {msg}{_priv_hint(e)}")
     return ok(f"{action} {' '.join(units) or '(manager)'}: OK{(' — ' + msg) if msg else ''}")
@@ -337,18 +409,177 @@ def h_pressure(a):
     return ok("\n".join(out))
 
 def h_net(a):
-    if not have("ss"):
-        return err("ss not available (install iproute2)")
-    if a.get("summary"):
-        rc, out, e = run(["ss", "-s"], 10)
+    op = a.get("op")  # default/None -> sockets (back-compat with summary/listening/pattern)
+    if op in (None, "sockets"):
+        if not have("ss"):
+            return err("ss not available (install iproute2)")
+        if a.get("summary"):
+            rc, out, e = run(["ss", "-s"], 10)
+            return ok(_trunc(out.strip() or e.strip()))
+        flags = "-tulpn" if a.get("listening", True) else "-tanp"
+        rc, out, e = run(["ss", flags], 12)
+        rows = out.splitlines()
+        pat = a.get("pattern")
+        if pat and rows:
+            rows = [rows[0]] + [r for r in rows[1:] if pat.lower() in r.lower()]
+        return ok(_trunc("\n".join(rows) or e.strip() or "no sockets"))
+    if op in ("addr", "links", "routes"):
+        if not have("ip"):
+            return err("ip not available (install iproute2)")
+        argv = {"addr": ["-br", "addr"], "links": ["-br", "link"], "routes": ["route"]}[op]
+        rc, out, e = run(["ip"] + argv, 8)
+        return ok(_trunc(out.strip() or e.strip() or "(none)"))
+    if op == "wifi":
+        if have("nmcli"):
+            rc, out, e = run(["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "dev", "wifi"], 10)
+            return ok(_trunc(out.strip() or e.strip() or "no wifi networks"))
+        if have("iw"):
+            rc, out, e = run(["iw", "dev"], 10)
+            return ok(_trunc(out.strip() or e.strip()))
+        return err("no wifi tool (nmcli or iw)")
+    if op == "nm":
+        if not have("nmcli"):
+            return err("nmcli not available (NetworkManager)")
+        rc, d, _ = run(["nmcli", "-t", "device", "status"], 10)
+        rc2, c, _ = run(["nmcli", "-t", "connection", "show", "--active"], 10)
+        return ok(_trunc((d.strip() + "\n--- active connections ---\n" + c.strip()).strip()))
+    return err("op must be sockets|addr|links|routes|wifi|nm")
+
+# --------------------------------------------------------------------------- #
+# observe: containers / disk / hardware  (read-only; from real-session log mining)
+# --------------------------------------------------------------------------- #
+def _container_cli(pref=None):
+    for c in ([pref] if pref else []) + ["docker", "podman"]:
+        if c and have(c):
+            return c
+    return None
+
+def h_containers(a):
+    cli = _container_cli(a.get("engine"))
+    if not cli:
+        return err("no container engine found (docker or podman)")
+    op = a.get("op", "ps")
+    name = a.get("name")
+    if op == "ps":
+        cmd = [cli, "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"]
+        if a.get("all"):
+            cmd.insert(2, "-a")
+        rc, out, e = run(cmd, 15)
+        return ok(_trunc(out.strip() or e.strip() or "no containers"))
+    if op == "logs":
+        if not name:
+            return err("op=logs needs `name`")
+        cmd = [cli, "logs", "--tail", str(int(a.get("lines", 60)))]
+        if a.get("since"):
+            cmd += ["--since", a["since"]]
+        cmd.append(name)
+        rc, out, e = run(cmd, 25)
+        return ok(_trunc((out + e).strip() or "(no logs)"))
+    if op == "inspect":
+        if not name:
+            return err("op=inspect needs `name`")
+        rc, out, e = run([cli, "inspect", name], 15)
         return ok(_trunc(out.strip() or e.strip()))
-    flags = "-tulpn" if a.get("listening", True) else "-tanp"
-    rc, out, e = run(["ss", flags], 12)
-    rows = out.splitlines()
-    pat = a.get("pattern")
-    if pat:
-        rows = [rows[0]] + [r for r in rows[1:] if pat.lower() in r.lower()] if rows else rows
-    return ok(_trunc("\n".join(rows) or e.strip() or "no sockets"))
+    if op == "stats":
+        rc, out, e = run([cli, "stats", "--no-stream", "--format",
+                          "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"], 25)
+        return ok(_trunc(out.strip() or e.strip() or "no running containers"))
+    if op == "images":
+        rc, out, e = run([cli, "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}"], 15)
+        return ok(_trunc(out.strip() or e.strip() or "no images"))
+    if op == "compose":
+        if cli != "docker":
+            return err("op=compose needs docker")
+        rc, out, e = run(["docker", "compose", "ls"], 15)
+        return ok(_trunc(out.strip() or e.strip() or "no compose projects"))
+    return err("op must be ps|logs|inspect|stats|images|compose")
+
+def _human_bytes(n):
+    for u in ("B", "K", "M", "G", "T"):
+        if n < 1024:
+            return f"{n:.0f}{u}"
+        n /= 1024
+    return f"{n:.0f}P"
+
+def h_disk(a):
+    op = a.get("op", "usage")
+    if op == "usage":
+        rc, out, e = run(["df", "-h", "--output=source,fstype,size,used,avail,pcent,target",
+                          "-x", "tmpfs", "-x", "devtmpfs", "-x", "squashfs"], 8)
+        return ok(_trunc(out.strip() or e.strip()))
+    if op == "du":
+        path = a.get("path") or "."
+        rc, out, e = run(["du", "-B1", "--max-depth", str(int(a.get("depth", 1))), path], 45)
+        if rc != 0 and not out:
+            return err(f"du failed: {e.strip()}")
+        items = []
+        for ln in out.splitlines():
+            try:
+                b, p = ln.split("\t", 1)
+                items.append((int(b), p))
+            except Exception:
+                pass
+        items.sort(reverse=True)
+        rows = [f"{_human_bytes(b):>7}  {p}" for b, p in items[:int(a.get("limit", 20))]]
+        return ok(_trunc("\n".join(rows) or "(empty)"))
+    if op == "blocks":
+        if not have("lsblk"):
+            return err("lsblk not available (util-linux)")
+        rc, out, e = run(["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL"], 10)
+        return ok(_trunc(out.strip() or e.strip()))
+    if op == "mounts":
+        if have("findmnt"):
+            rc, out, e = run(["findmnt", "--real", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"], 10)
+        else:
+            rc, out, e = run(["mount"], 10)
+        return ok(_trunc(out.strip() or e.strip()))
+    return err("op must be usage|du|blocks|mounts")
+
+def h_hardware(a):
+    op = a.get("op", "summary")
+    if op == "cpu":
+        rc, out, e = run(["lscpu"], 8)
+        return ok(_trunc(out.strip() or e.strip()))
+    if op == "pci":
+        if not have("lspci"):
+            return err("lspci not available (pciutils)")
+        rc, out, e = run(["lspci"] + (["-nnk"] if a.get("verbose") else []), 10)
+        return ok(_trunc(out.strip() or e.strip()))
+    if op == "usb":
+        if not have("lsusb"):
+            return err("lsusb not available (usbutils)")
+        rc, out, e = run(["lsusb"], 10)
+        return ok(_trunc(out.strip() or e.strip()))
+    if op == "gpu":
+        out = []
+        if have("nvidia-smi"):
+            rc, o, _ = run(["nvidia-smi", "--query-gpu=name,memory.total,memory.used,"
+                            "utilization.gpu,temperature.gpu", "--format=csv,noheader"], 10)
+            if rc == 0 and o.strip():
+                out.append("NVIDIA: " + "; ".join(o.split("\n")))
+        if have("lspci"):
+            rc, o, _ = run(["lspci"], 10)
+            vid = [l for l in o.splitlines() if any(k in l for k in ("VGA", "3D", "Display"))]
+            if vid:
+                out.append("PCI display:\n" + "\n".join(vid))
+        cards = [os.path.basename(c) for c in sorted(glob.glob("/sys/class/drm/card[0-9]"))]
+        if cards:
+            out.append("DRM cards: " + ", ".join(cards))
+        return ok(_trunc("\n\n".join(out) or "no GPU info"))
+    # summary
+    out = []
+    rc, o, _ = run(["uname", "-srm"], 5)
+    out.append(o.strip())
+    if have("lscpu"):
+        rc, o, _ = run(["lscpu"], 8)
+        keep = ("Model name", "Architecture", "CPU(s)", "Socket(s)",
+                "Core(s) per socket", "Thread(s) per core")
+        out.append("\n".join(l for l in o.splitlines() if l.split(":")[0].strip() in keep))
+    rc, o, _ = run(["free", "-h"], 5)
+    if o:
+        mem = [l for l in o.splitlines() if l.lower().startswith("mem")]
+        out += mem
+    return ok(_trunc("\n".join(x for x in out if x)))
 
 def h_sensors(a):
     out = []
@@ -382,18 +613,19 @@ def h_power(a):
     cmd = base + [action]
     if bool(a.get("dry_run")):
         return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
-    if not bool(a.get("confirm")):
-        # capability probe for context
-        cap = ""
-        if have("systemctl"):
-            verb = {"poweroff": "can-poweroff", "reboot": "can-reboot", "suspend": "can-suspend",
-                    "hibernate": "can-hibernate", "halt": "can-halt"}.get(action)
-            if verb:
-                _, co, _ = run(["systemctl", verb], 6)
-                cap = f" (systemctl {verb}: {co.strip() or 'unknown'})"
-        return err(f"REFUSED: `{action}` is irreversible/disruptive. Re-call with confirm=true.{cap}")
+    cap = ""
+    if have("systemctl"):
+        verb = {"poweroff": "can-poweroff", "reboot": "can-reboot", "suspend": "can-suspend",
+                "hibernate": "can-hibernate", "halt": "can-halt"}.get(action)
+        if verb:
+            _, co, _ = run(["systemctl", verb], 6)
+            cap = f" [{verb}: {co.strip() or 'unknown'}]"
+    block = require_human(f"{action} {os.uname().nodename} — IRREVERSIBLE/disruptive{cap}",
+                          "confirm", a)
+    if block:
+        return block
     rc, out, e = run(cmd, 20)
-    audit("os_power", {"action": action}, f"rc={rc} {(out + e).strip()[:120]}")
+    audit("os_power", {"action": action, "approval": approval_path()}, f"rc={rc} {(out + e).strip()[:120]}")
     if rc != 0:
         return err(f"{action} failed (rc {rc}): {(out + e).strip()}{_priv_hint(e)}")
     return ok(f"{action}: requested")
@@ -428,20 +660,27 @@ def _machine_tool(a, binary, status_args, set_map, label):
         rc, out, e = run([binary] + status_args, 10)
         return ok(_trunc(out.strip() or e.strip()))
     if op in set_map:
-        val = a.get("value")
         need_val, argv = set_map[op]
+        is_write = op.startswith("set-")
+        val = a.get("value")
         if need_val and val is None:
             return err(f"op={op} needs `value`")
+        if not is_write:                       # list-* etc. are read-only — no gate
+            rc, out, e = run([binary] + argv, 12)
+            return ok(_trunc(out.strip() or e.strip() or "(empty)"))
         base, gerr = _priv_prefix(binary, True)
         if gerr:
             return err(gerr)
         cmd = base + argv + ([str(val)] if need_val else [])
         if bool(a.get("dry_run")):
             return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
-        if not bool(a.get("force")):
-            return err(f"REFUSED: `{op}` changes machine {label}. Pass force=true (or dry_run=true).")
+        block = require_human(f"set machine {label}: {op} {val if need_val else ''}".strip(),
+                              "force", a)
+        if block:
+            return block
         rc, out, e = run(cmd, 15)
-        audit(f"os_{label}", {"op": op, "value": val}, f"rc={rc} {(out + e).strip()[:120]}")
+        audit(f"os_{label}", {"op": op, "value": val, "approval": approval_path()},
+              f"rc={rc} {(out + e).strip()[:120]}")
         if rc != 0:
             return err(f"{op} failed (rc {rc}): {(out + e).strip()}{_priv_hint(e)}")
         return ok(f"{op} {val if need_val else ''}: OK")
@@ -504,11 +743,12 @@ def h_dbus(a):
             cmd += [str(x) for x in (a.get("args") or [])]
         if bool(a.get("dry_run")):
             return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
-        if not bool(a.get("force")):
-            return err(f"REFUSED: op={op} has side effects. Pass force=true (or dry_run=true).")
+        block = require_human(f"D-Bus {op} {a['service']} {a['member']} (side effects)", "force", a)
+        if block:
+            return block
         rc, out, e = run(cmd, tmo)
-        audit("os_dbus", {"op": op, "service": a["service"], "member": a["member"]},
-              f"rc={rc} {(out + e).strip()[:120]}")
+        audit("os_dbus", {"op": op, "service": a["service"], "member": a["member"],
+                          "approval": approval_path()}, f"rc={rc} {(out + e).strip()[:120]}")
     else:
         return err("op must be list|tree|introspect|get-property|set-property|call")
     if rc != 0 and not out:
@@ -536,7 +776,8 @@ def h_notify(a):
 def h_diag(a):
     euid = os.geteuid()
     bins = {b: have(b) for b in ("systemctl", "loginctl", "journalctl", "busctl",
-                                 "timedatectl", "hostnamectl", "localectl", "ss",
+                                 "timedatectl", "hostnamectl", "localectl", "ss", "ip",
+                                 "lsblk", "lspci", "docker", "podman", "nvidia-smi",
                                  "notify-send", "gdbus", "sudo")}
     lines = [
         f"os-control-mcp {__version__}",
@@ -550,8 +791,12 @@ def h_diag(a):
     if have("busctl"):
         rc, out, _ = run(["busctl", "--system", "--no-pager", "list"], 8)
         lines.append(f"system bus: {'reachable' if rc == 0 else 'unreachable'} ({len(out.splitlines())} names)")
-    lines.append(f"safety: hard floor {len(CRITICAL_FLOOR)} units (never severable) + "
-                 f"{len(PROTECTED_TOKENS)} protected tokens (force to override); audit -> {_state_dir()}/audit.jsonl")
+    hil = ("human-in-the-loop via MCP elicitation" if ELICIT_OK
+           else ("REFUSE (OSCTL_REQUIRE_HUMAN=1, no elicitation)" if REQUIRE_HUMAN
+                 else "flag fallback (client has no elicitation capability)"))
+    lines.append(f"gating: hard floor {len(CRITICAL_FLOOR)} units (never severable) + "
+                 f"{len(PROTECTED_TOKENS)} protected tokens; approval = {hil}")
+    lines.append(f"audit -> {_state_dir()}/audit.jsonl")
     return ok("\n".join(lines))
 
 def h_reload(a):
@@ -591,12 +836,21 @@ TOOLS = [
     {"name": "os_pressure", "title": "PSI pressure", "annotations": _RO,
      "description": "Pressure Stall Information from /proc/pressure/{cpu,memory,io} — the real 'is the box starving' signal (some/full avg10/avg60/avg300). Read-only.",
      "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "os_net", "title": "Sockets / network", "annotations": _RO,
-     "description": "Socket stats via ss. Default: listening TCP/UDP + owning process (ss -tulpn). summary=true → ss -s (counts by state). listening=false → all connections. Optional `pattern`. Read-only.",
-     "inputSchema": {"type": "object", "properties": {"summary": {"type": "boolean"}, "listening": {"type": "boolean"}, "pattern": {"type": "string"}}}},
+    {"name": "os_net", "title": "Network", "annotations": _RO,
+     "description": "Network state (read-only). op=sockets (default; ss -tulpn listening + owning PID; summary=true→ss -s; listening=false→all; `pattern`) | addr (ip -br addr) | links (ip -br link) | routes (ip route) | wifi (nmcli/iw scan) | nm (NetworkManager device + active connections).",
+     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["sockets", "addr", "links", "routes", "wifi", "nm"]}, "summary": {"type": "boolean"}, "listening": {"type": "boolean"}, "pattern": {"type": "string"}}}},
     {"name": "os_sensors", "title": "Thermal sensors", "annotations": _RO,
      "description": "Temperatures from /sys/class/thermal/thermal_zone*. full=true also runs `sensors` (lm_sensors) if present. Read-only.",
      "inputSchema": {"type": "object", "properties": {"full": {"type": "boolean"}}}},
+    {"name": "os_containers", "title": "Containers", "annotations": _RO,
+     "description": "Inspect Docker/Podman (read-only — the AI's most-used host observation). op=ps (default; all=true for stopped) | logs (`name`, lines, since) | inspect (`name`) | stats (live cpu/mem/net/io) | images | compose (docker compose ls). `engine`=docker|podman (auto-detected).",
+     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["ps", "logs", "inspect", "stats", "images", "compose"]}, "name": {"type": "string"}, "all": {"type": "boolean"}, "lines": {"type": "number"}, "since": {"type": "string"}, "engine": {"type": "string", "enum": ["docker", "podman"]}}}},
+    {"name": "os_disk", "title": "Storage", "annotations": _RO,
+     "description": "Storage (read-only). op=usage (default; df -h real fs) | du (largest dirs under `path`, `depth`, `limit` — sorted) | blocks (lsblk: devices/partitions/fs/mounts) | mounts (findmnt real mounts).",
+     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["usage", "du", "blocks", "mounts"]}, "path": {"type": "string"}, "depth": {"type": "number"}, "limit": {"type": "number"}}}},
+    {"name": "os_hardware", "title": "Hardware / GPU", "annotations": _RO,
+     "description": "Hardware inventory (read-only). op=summary (default; kernel + cpu model + memory) | cpu (lscpu) | pci (lspci; verbose=true→-nnk drivers) | usb (lsusb) | gpu (nvidia-smi + PCI display + /sys/class/drm cards).",
+     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["summary", "cpu", "pci", "usb", "gpu"]}, "verbose": {"type": "boolean"}}}},
     {"name": "os_power", "title": "Power control", "annotations": _MUT,
      "description": "Power state via logind/systemd: suspend|hibernate|hybrid-sleep|suspend-then-hibernate|reboot|poweroff|halt. IRREVERSIBLE — refused unless confirm=true (the refusal includes the systemctl can-* capability probe). dry_run=true previews. sudo -n when not root. Audit-logged.",
      "inputSchema": {"type": "object", "properties": {"action": {"type": "string"}, "confirm": {"type": "boolean"}, "dry_run": {"type": "boolean"}}, "required": ["action"]}},
@@ -627,21 +881,24 @@ HANDLERS = {
     "os_diag": h_diag, "os_services": h_services, "os_service": h_service, "os_wait": h_wait,
     "os_journal": h_journal, "os_resources": h_resources, "os_processes": h_processes,
     "os_pressure": h_pressure, "os_net": h_net, "os_sensors": h_sensors,
+    "os_containers": h_containers, "os_disk": h_disk, "os_hardware": h_hardware,
     "os_power": h_power, "os_session": h_session, "os_time": h_time, "os_hostname": h_hostname,
     "os_locale": h_locale, "os_notify": h_notify, "os_dbus": h_dbus, "os_reload": h_reload,
 }
 
 INSTRUCTIONS = (
-    "Drive the Linux host through its sanctioned interfaces — systemd, logind, journald, "
-    "D-Bus, machine settings — not raw PID hacks. Loop: os_diag (health) → "
-    "os_services/os_journal/os_resources/os_processes/os_pressure/os_net/os_sensors/os_session "
-    "(observe) → os_service/os_power/os_dbus/os_time/os_hostname/os_locale/os_notify (act) → "
-    "os_wait / re-read (confirm). Safety: a hard floor refuses severing dbus/logind/init even "
-    "with force; the self-preservation guard refuses severing units the agent depends on unless "
-    "force=true; os_power needs confirm=true; machine-setting writes + os_dbus call need force=true; "
-    "any mutation accepts dry_run=true to preview. System mutations need root/polkit (sudo -n when "
-    "not root). Every mutation is audit-logged. Works with any MCP client. Pairs with screen-mcp "
-    "(GUI), NATS, and A2A for a full-stack agent."
+    "Drive the Linux host through its sanctioned interfaces — systemd, logind, journald, D-Bus, "
+    "machine settings, containers — not raw PID hacks. Loop: os_diag (health) → observe "
+    "(os_services/os_journal/os_resources/os_processes/os_pressure/os_net/os_disk/os_hardware/"
+    "os_containers/os_sensors/os_session) → act (os_service/os_power/os_dbus/os_time/os_hostname/"
+    "os_locale/os_notify) → os_wait / re-read (confirm). HUMAN-IN-THE-LOOP gating: destructive "
+    "actions (severing a service, power, D-Bus/machine writes) ask a HUMAN for approval via MCP "
+    "elicitation when your client supports it — you do NOT decide; the human does. If the client "
+    "has no elicitation channel, the force/confirm flags are the fallback (set OSCTL_REQUIRE_HUMAN=1 "
+    "to forbid even that). A hard floor refuses severing dbus/logind/init ALWAYS — never bypassable. "
+    "Any mutation accepts dry_run=true to preview the exact command. System mutations need root/polkit "
+    "(sudo -n when not root). Every mutation is audit-logged. Works with any MCP client. Pairs with "
+    "screen-mcp (GUI), NATS, and A2A for a full-stack agent."
 )
 
 MUTATING = {"os_service", "os_power", "os_dbus", "os_time", "os_hostname", "os_locale", "os_notify", "os_reload"}
@@ -659,7 +916,12 @@ def reply(mid, result=None, error=None):
     sys.stdout.flush()
 
 def main():
-    for line in sys.stdin:
+    # readline() loop (not `for line in sys.stdin`) so elicit() can read the
+    # human's response from stdin without the iterator's read-ahead swallowing it.
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
         line = line.strip()
         if not line:
             continue
@@ -670,6 +932,9 @@ def main():
         mid = msg.get("id")
         method = msg.get("method")
         if method == "initialize":
+            global ELICIT_OK
+            client_caps = (msg.get("params") or {}).get("capabilities") or {}
+            ELICIT_OK = "elicitation" in client_caps
             reply(mid, {"protocolVersion": "2025-11-25",
                         "capabilities": {"tools": {"listChanged": True}},
                         "serverInfo": {"name": "os-control-mcp", "version": __version__},

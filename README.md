@@ -74,7 +74,10 @@ It speaks MCP `2025-11-25` over stdio; the tools appear like any other MCP serve
 | `os_resources` | load + memory + disk (+ optional per-unit accounting) |
 | `os_processes` | top processes by cpu/mem |
 | `os_pressure` | PSI from `/proc/pressure` — the real "is the box starving" signal |
-| `os_net` | sockets via `ss` (listening + owning process, or summary) |
+| `os_net` | network — sockets (`ss`), `ip` addr/links/routes, wifi, NetworkManager |
+| `os_disk` | storage — `df`, `du` (largest dirs), `lsblk`, mounts |
+| `os_containers` | **Docker/Podman** — ps/logs/inspect/stats/images/compose |
+| `os_hardware` | cpu/pci/usb/**gpu** (nvidia-smi + DRM) inventory |
 | `os_sensors` | thermal-zone temperatures (+ `lm_sensors` if present) |
 | `os_session` | logind sessions / users / **inhibitors** |
 
@@ -92,22 +95,31 @@ It speaks MCP `2025-11-25` over stdio; the tools appear like any other MCP serve
 
 ## The guards (the whole point)
 
-Three layers, plus an audit trail:
+**Human-in-the-loop, not model-in-the-loop.** Every destructive action — severing
+a service (stop/kill/restart/disable/mask), power (reboot/poweroff/…), and D-Bus /
+machine-setting *writes* — is gated for a **human's** approval, in this order:
 
-1. **Hard floor (unbypassable).** A *severing* action on the agent's absolute
-   substrate — `dbus`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target` —
-   is refused **even with `force=true`**. There is no flag that lets a model
+1. **Hard floor (never bypassable).** Severing the agent's absolute substrate —
+   `dbus`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target`,
+   `sysinit.target` — is refused **even with `force`**. No flag lets a model
    power-cycle the bus it's speaking on.
-2. **Self-preservation guard (`force`-overridable).** A severing action
-   (stop/restart/disable/mask/kill) on a unit the agent *stands on* (`sshd`,
-   `NetworkManager`/networkd, `tailscaled`, the `user@…` session, `goosed`, …) is
-   refused unless `force=true` — *don't saw off the branch you're sitting on.*
-3. **Confirm / dry-run.** `os_power` needs `confirm=true`; machine-setting writes
-   and `os_dbus` `set-property`/`call` need `force=true`; **any mutating tool
-   accepts `dry_run=true`** to return the exact command without running it.
+2. **Human approval via MCP elicitation.** When your MCP client supports
+   elicitation, the server **asks the human** (`elicitation/create`) before any
+   destructive action and runs it only if the human accepts. The model's
+   `force`/`confirm` flags are **ignored** here — *the human is the authority, not
+   the model.* (Verified: a declined elicitation never executes.)
+3. **Flag fallback (only when there's no human channel).** If the client can't
+   elicit, the server falls back to the `force`/`confirm` flags so headless
+   automation still works — except severing a unit the agent *stands on* (`sshd`,
+   `NetworkManager`, `tailscaled`, the session, `goosed`, …) which still needs
+   `force` (*don't saw off the branch you're sitting on*). Set
+   **`OSCTL_REQUIRE_HUMAN=1`** to forbid the flag fallback entirely — no human
+   elicitation channel, no mutation.
+4. **Preview.** Any mutating tool accepts **`dry_run=true`** to return the exact
+   command without running it.
 
-Every mutation is appended to an **audit log** at
-`$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
+Every mutation is appended to an **audit log** (with the approval path — human vs
+flag) at `$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
 
 ## Privilege
 

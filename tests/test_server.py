@@ -110,3 +110,52 @@ def test_dbus_set_property_needs_force():
 def test_wait_validates_state():
     assert server.h_wait({"unit": "x.service", "state": "bogus"}).get("isError")
     assert server.h_wait({"state": "active"}).get("isError")
+
+
+# --- HIL: human-in-the-loop gating via elicitation -------------------------- #
+
+def test_hil_elicitation_is_authority():
+    orig = server.elicit
+    try:
+        server.elicit = lambda msg: "accept"
+        assert server.require_human("stop x", "force", {}) is None         # human approves
+        server.elicit = lambda msg: "decline"
+        r = server.require_human("stop x", "force", {"force": True})        # flag IGNORED
+        assert r.get("isError") and "DENIED by human" in r["content"][0]["text"]
+    finally:
+        server.elicit = orig
+
+
+def test_hil_flag_fallback_without_elicitation():
+    orig = server.elicit
+    try:
+        server.elicit = lambda msg: None                                   # no capability
+        assert server.require_human("stop x", "force", {}).get("isError")  # high-risk needs flag
+        assert server.require_human("stop x", "force", {"force": True}) is None
+        assert server.require_human("stop x", "force", {}, headless_allow=True) is None  # low risk
+    finally:
+        server.elicit = orig
+
+
+def test_hil_require_human_mode_blocks_flag_fallback():
+    orig_e, orig_r = server.elicit, server.REQUIRE_HUMAN
+    try:
+        server.elicit = lambda msg: None
+        server.REQUIRE_HUMAN = True
+        r = server.require_human("poweroff", "confirm", {"confirm": True})  # flag ignored
+        assert r.get("isError") and "OSCTL_REQUIRE_HUMAN" in r["content"][0]["text"]
+    finally:
+        server.elicit, server.REQUIRE_HUMAN = orig_e, orig_r
+
+
+def test_hil_hard_floor_beats_everything():
+    r = server.require_human("stop dbus", "force", {"force": True}, floor=True)
+    assert r.get("isError") and "hard floor" in r["content"][0]["text"].lower()
+
+
+def test_new_observe_tools_are_readonly_and_registered():
+    names = {t["name"]: t for t in server.TOOLS}
+    for n in ("os_containers", "os_disk", "os_hardware"):
+        assert n in names and n in server.HANDLERS
+        assert names[n]["annotations"].get("readOnlyHint") is True
+        assert n not in server.MUTATING

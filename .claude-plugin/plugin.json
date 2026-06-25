@@ -37,5 +37,5 @@
       "command": "${CLAUDE_PLUGIN_ROOT}/bin/os-control-mcp"
     }
   },
-  "version": "2026.6.24"
+  "version": "2026.6.25"
 }

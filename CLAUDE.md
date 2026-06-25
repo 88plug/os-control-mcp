@@ -14,6 +14,16 @@ journald, and D-Bus — never raw PID hacks. Sibling to screen-mcp (GUI control)
 - `bin/os-control-mcp` — launcher (venv → system python3 → exec server.py).
 
 ## Safety (the point of the plugin — do not weaken without thought)
+- **Human-in-the-loop is the headline.** Every destructive path routes through
+  `require_human(desc, flag_name, args, *, floor, headless_allow)`. Order: hard
+  floor → `elicit()` (MCP `elicitation/create`, the human decides — model flags
+  IGNORED) → `OSCTL_REQUIRE_HUMAN=1` refuses if no elicitation → flag fallback
+  (`force`/`confirm`) / `headless_allow` for low self-risk. `ELICIT_OK` is set at
+  `initialize` from the client's `capabilities.elicitation`. NOTE: `main()` uses
+  `sys.stdin.readline()` (NOT `for line in sys.stdin`) so `elicit()` can read the
+  human's reply without the iterator's read-ahead eating it — do not revert that.
+  New destructive handlers MUST call `require_human()` (don't re-add bare flag
+  checks) and pass `approval_path()` into `audit()`.
 - **Self-preservation guard** (`PROTECTED_TOKENS` + `SEVERING_ACTIONS` +
   `is_protected`): a severing systemd action (stop/restart/disable/mask/kill) on a
   unit the agent stands on (dbus, logind, sshd, network, tailscaled, the session,
