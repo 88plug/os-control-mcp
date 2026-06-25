@@ -14,46 +14,69 @@ Pure standard library, zero pip runtime deps. Linux + systemd.
 /mcp          # confirm the "os" server loaded and tools are listed
 ```
 
-Installs **disabled by default** (it can stop services and power off the box —
-opt in consciously). No setup: it uses the host's existing systemd/D-Bus tooling.
+⚠️ **Treat as privileged** — it can stop services and power off the box. Install
+it deliberately and disable it via `/plugin` when not in use. No setup: it uses
+the host's existing systemd/D-Bus tooling.
 
 ## The loop
 
-**sense → act → confirm.** `os_diag` (health/privilege) → `os_services` /
-`os_journal` / `os_resources` / `os_processes` (observe) → `os_service` /
-`os_power` / `os_dbus` / `os_notify` (act) → re-read to confirm.
+**sense → act → confirm.** `os_diag` (health/privilege) →
+`os_services`/`os_journal`/`os_resources`/`os_processes`/`os_pressure`/`os_net`/`os_sensors`/`os_session`
+(observe) →
+`os_service`/`os_power`/`os_dbus`/`os_time`/`os_hostname`/`os_locale`/`os_notify`
+(act) → `os_wait` or re-read to confirm.
 
 ## Tools
 
-### Read-only
+### Observe (read-only)
 - **`os_diag`** — euid, backend binaries, system/user manager state, bus
-  reachability, guard status. Run it first.
-- **`os_services`** — list units (filter `type`/`state`/`pattern`) or `status` one. `scope`=system|user.
-- **`os_journal`** — journald: `unit`, `lines`, `since`, `priority`, `boot`, `grep`. `scope`=system|user.
-- **`os_resources`** — load, `free -h`, `df -h`, and optional per-`unit` accounting.
+  reachability, safety status. Run it first.
+- **`os_services`** — `op`=`list` (filter `type`/`state`/`pattern`) · `status` ·
+  `show` (key=value props) · `cat` (merged unit + drop-ins) · `deps`
+  (`list-dependencies`, `reverse` for reverse) · `files` (`list-unit-files`).
+  `scope`=system|user.
+- **`os_journal`** — journald: `unit`, `lines`, `since`/`until`, `priority`,
+  `grep` (server-side PCRE), `kernel` (`-k` dmesg), `boot`, `boots`
+  (`--list-boots`), `fields` (`-N`), `match`=`['_SYSTEMD_UNIT=x', …]`,
+  `output`=short/json/json-pretty/cat. `scope`=system|user.
+- **`os_resources`** — load, `free -h`, `df -h`, optional per-`unit` accounting.
 - **`os_processes`** — top by `by`=cpu|mem, `limit`, `pattern`.
+- **`os_pressure`** — PSI from `/proc/pressure/{cpu,memory,io}` (some/full avg10/60/300).
+- **`os_net`** — `ss`: listening sockets + owning process; `summary=true` → `ss -s`.
+- **`os_sensors`** — `/sys/class/thermal` temps; `full=true` also runs `sensors`.
+- **`os_session`** — logind `list-sessions`/`list-users`/`session-status`/`inhibitors`.
 
-### Mutating (guarded)
-- **`os_service`** — `start|stop|restart|reload|try-restart|enable|disable|mask|unmask|kill`.
-  Severing actions on protected units are refused unless `force=true` (see below).
+### Act (guarded)
+- **`os_service`** — `start|stop|restart|reload|try-restart|enable|disable|mask|`
+  `unmask|kill|reset-failed|revert|daemon-reload|daemon-reexec`. `unit` may be a
+  **list** (batch); omit for daemon-reload/reexec. Severing a protected unit needs
+  `force=true`; the hard floor is never bypassable (see below). `dry_run=true` previews.
+- **`os_wait`** — block until `unit` reaches `state` (active|inactive|failed) or `timeout`.
 - **`os_power`** — `suspend|hibernate|hybrid-sleep|suspend-then-hibernate|reboot|poweroff|halt`.
-  Refused unless `confirm=true`.
-- **`os_dbus`** — `list|tree|introspect|call`. `call` refused unless `force=true`.
+  Refused unless `confirm=true` (the refusal includes the `systemctl can-*` probe). `dry_run`.
+- **`os_time`** — `status`/`list-timezones`/`set-timezone`/`set-ntp`. Writes need `force=true`.
+- **`os_hostname`** — `status`/`set-hostname`. Writes need `force=true`.
+- **`os_locale`** — `status`/`list-locales`/`set-locale`/`set-keymap`. Writes need `force=true`.
+- **`os_dbus`** — `list|tree|introspect|get-property|set-property|call`, `scope`,
+  `timeout`. `set-property`/`call` need `force=true`; reads are free. `dry_run`.
 - **`os_notify`** — desktop notification to the logged-in user.
 - **`os_reload`** — hot-reload the server in place.
 
 ## Safety model
 
-Three guards, by design:
+Three layers + an audit trail, by design:
 
-| Guard | Applies to | Bypass |
+| Layer | Applies to | Bypass |
 |---|---|---|
-| **Self-preservation** | severing systemd actions (stop/restart/disable/mask/kill) on units the agent depends on — `dbus`, `systemd-logind`, `sshd`, `NetworkManager`/networkd, `tailscaled`, `user@…` session, `goosed`, … | `force=true` |
+| **Hard floor** | severing the agent's absolute substrate — `dbus`, `dbus-broker`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target`, `sysinit.target` | **none** (refused even with `force`) |
+| **Self-preservation** | severing systemd actions on units the agent depends on — `sshd`, `NetworkManager`/networkd, `tailscaled`, `user@…` session, `goosed`, … | `force=true` |
 | **Power confirm** | `os_power` (irreversible) | `confirm=true` |
-| **D-Bus call** | `os_dbus op=call` (side effects) | `force=true` |
+| **Writes** | `os_dbus set-property`/`call`, `os_time`/`os_hostname`/`os_locale` writes | `force=true` |
+| **Preview** | any mutating tool | `dry_run=true` returns the exact command, runs nothing |
 
 The self-preservation guard is the analog of screen-mcp's user-takeover guard —
-*don't saw off the branch you're sitting on.*
+*don't saw off the branch you're sitting on.* Every mutation is appended to
+`$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
 
 ## Privilege
 

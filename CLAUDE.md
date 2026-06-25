@@ -20,10 +20,19 @@ journald, and D-Bus — never raw PID hacks. Sibling to screen-mcp (GUI control)
   goosed, …) is refused unless `force=true`. This is the analog of screen-mcp's
   user-takeover guard — "don't saw off the branch you're sitting on." When adding
   units the agent depends on, extend `PROTECTED_TOKENS`.
-- **`os_power` requires `confirm=true`**; **`os_dbus op=call` requires `force=true`**.
-- Read-only tools (`os_diag`, `os_services` list/status, `os_journal`,
-  `os_resources`, `os_processes`) carry `readOnlyHint: True`; mutating tools carry
-  `destructiveHint: True`. Keep these honest.
+- **Hard floor** (`CRITICAL_FLOOR` + `is_floor`): severing the agent's *absolute*
+  substrate (dbus/dbus-broker/systemd-logind/init.scope/-.slice/basic.target/
+  sysinit.target) is refused **even with `force=true`** — there is no flag that
+  power-cycles the bus the model speaks on. `CRITICAL_FLOOR ⊂ PROTECTED_TOKENS`
+  conceptually; keep the floor tiny and truly unbypassable.
+- **`os_power` requires `confirm=true`**; **`os_dbus` `set-property`/`call` and the
+  `os_time`/`os_hostname`/`os_locale` writes require `force=true`**.
+- **`dry_run=true`** is honored by every mutating handler (returns the exact
+  command via `_cmdstr`, runs nothing) — keep it working when adding mutations.
+- **Audit log**: every mutation calls `audit()` → append-only JSONL at
+  `$XDG_STATE_HOME/os-control-mcp/audit.jsonl`. New mutating handlers must `audit()`.
+- Read-only tools carry `readOnlyHint: True` (`_RO`); mutating tools carry
+  `destructiveHint: True` (`_MUT`). Keep these honest.
 
 ## Privilege model
 Read-only works unprivileged. System-scope mutations need root/polkit; when
