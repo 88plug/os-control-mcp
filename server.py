@@ -797,6 +797,8 @@ def h_diag(a):
     lines.append(f"gating: hard floor {len(CRITICAL_FLOOR)} units (never severable) + "
                  f"{len(PROTECTED_TOKENS)} protected tokens; approval = {hil}")
     lines.append(f"audit -> {_state_dir()}/audit.jsonl")
+    lines.append("ethics: enforces The Agent Oath §1,2,3,5,7,11 (human welfare > task; "
+                 "human agency/oversight via HIL) — https://theagentoath.com")
     return ok("\n".join(lines))
 
 def h_reload(a):
@@ -897,8 +899,10 @@ INSTRUCTIONS = (
     "has no elicitation channel, the force/confirm flags are the fallback (set OSCTL_REQUIRE_HUMAN=1 "
     "to forbid even that). A hard floor refuses severing dbus/logind/init ALWAYS — never bypassable. "
     "Any mutation accepts dry_run=true to preview the exact command. System mutations need root/polkit "
-    "(sudo -n when not root). Every mutation is audit-logged. Works with any MCP client. Pairs with "
-    "screen-mcp (GUI), NATS, and A2A for a full-stack agent."
+    "(sudo -n when not root). Every mutation is audit-logged. This server is a reference ENFORCER of "
+    "The Agent Oath (theagentoath.com) — human welfare over task completion, human agency and oversight "
+    "preserved via the HIL gate; the operator's gating is the authority. Works with any MCP client. "
+    "Pairs with screen-mcp (GUI), NATS, and A2A for a full-stack agent."
 )
 
 MUTATING = {"os_service", "os_power", "os_dbus", "os_time", "os_hostname", "os_locale", "os_notify", "os_reload"}

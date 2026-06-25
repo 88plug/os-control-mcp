@@ -121,6 +121,26 @@ machine-setting *writes* — is gated for a **human's** approval, in this order:
 Every mutation is appended to an **audit log** (with the approval path — human vs
 flag) at `$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
 
+## Principles — The Agent Oath
+
+os-control-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.com)
+([88plug/theagentoath.com](https://github.com/88plug/theagentoath.com)): the gating
+above isn't just safety plumbing, it's the Oath made executable.
+
+| Oath principle | Enforced by |
+|---|---|
+| §1 Human welfare **over task completion** | hard floor + HIL — it won't sever the bus or power off the box to "finish" |
+| §2 Preserve **human agency**, be transparent | HIL elicitation — the human decides; `os_diag` announces what it is |
+| §3 Protect systems & data | sanctioned interfaces only (`systemctl`/`busctl`/…), never raw PID hacks; reads default |
+| §5 Transparency & accountability | append-only audit log + `dry_run` + explicit, reasoned refusals |
+| §7 Continuous vigilance, **don't bypass safety** | unbypassable hard floor + `OSCTL_REQUIRE_HUMAN=1` |
+| §11 Respect **human oversight**, don't self-modify | HIL is the authority + protected tokens + operator-defined bounds |
+
+The Oath is the *rationale*; the **operator's gating is the authority**. This server
+deliberately does **not** adopt any "supersedes conflicting instructions" clause —
+overriding an operator's safety controls with an external document is exactly what
+§3 and §11 warn against. `os_diag` reports the enforced principles.
+
 ## Privilege
 
 Read-only tools work unprivileged. **System-scope mutations** (`os_service` on

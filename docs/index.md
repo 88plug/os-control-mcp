@@ -86,6 +86,17 @@ never executes (the analog of screen-mcp's user-takeover guard: *don't saw off t
 branch you're sitting on*). Every mutation is appended — with its approval path
 (human vs flag) — to `$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
 
+## Principles — The Agent Oath
+
+os-control-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.com):
+the gating is the Oath made executable — §1 human welfare over task completion
+(hard floor + HIL), §2 human agency (HIL elicitation), §3 protect systems
+(sanctioned interfaces only), §5 transparency (audit + `dry_run`), §7 don't bypass
+safety (unbypassable floor + `OSCTL_REQUIRE_HUMAN`), §11 respect human oversight
+(HIL authority + operator bounds). The Oath is the rationale; the **operator's
+gating is the authority** — this server does not adopt any "supersedes instructions"
+clause. `os_diag` reports the enforced principles.
+
 ## Privilege
 
 Read-only tools work unprivileged. System-scope mutations (`os_service` on system
