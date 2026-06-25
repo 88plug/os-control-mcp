@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Run from repo root: `pytest`. tests/ imports the top-level server module, so the
+# project root must be on PYTHONPATH.
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -1,0 +1,25 @@
+# os-control-mcp — Python dependencies.
+#
+# RUNTIME: none. The server is pure standard library — it shells out to the host's
+# own sanctioned tooling (systemctl, loginctl, journalctl, busctl, notify-send /
+# gdbus). A plain python3 (>=3.9) runs it. `os_diag` reports which of those
+# backend binaries are present + usable.
+#
+# DEV: the test runner only.
+pytest>=8.0
+
+# ---------------------------------------------------------------------------
+# SYSTEM DEPENDENCIES (provided by the OS; not pip-installable)
+# ---------------------------------------------------------------------------
+#   * systemd            # systemctl, loginctl, journalctl, busctl (present on any
+#                        #   systemd distro — Arch, Debian/Ubuntu, Fedora, …)
+#   * dbus               # system + session bus (busctl / gdbus / notifications)
+#   * libnotify          # notify-send  (optional — os_notify falls back to gdbus)
+#   * sudo               # optional — used as `sudo -n` for system-scope mutations
+#                        #   when the server is not running as root (or use polkit)
+#
+# Privilege: read-only tools (status/list/journal/resources) work unprivileged.
+# System-scope MUTATIONS (os_service on system units, os_power) need root or a
+# polkit rule; when euid != 0 the server tries `sudo -n` and otherwise says so.
+# Run goosed/the host as root, add passwordless sudo for systemctl, or a polkit
+# rule, to allow system mutations headlessly.

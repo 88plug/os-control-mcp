@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "os-control-mcp",
+  "description": "The sanctioned OS motor cortex for Linux — systemd, journald, logind, D-Bus — with a self-preservation guard.",
+  "owner": {
+    "name": "88plug",
+    "email": "andrew@88plug.com"
+  },
+  "plugins": [
+    {
+      "name": "os-control-mcp",
+      "source": ".",
+      "displayName": "os-control-mcp",
+      "description": "MCP server (+ control-os skill) giving Claude sanctioned control of a Linux host: systemd services/timers, journald logs, host resources/processes, desktop notifications, D-Bus, and power — via systemctl/loginctl/journalctl/busctl, never raw PID hacks. Pure-stdlib, zero pip deps. Self-preservation guard blocks severing actions on units the agent stands on.",
+      "author": { "name": "88plug", "email": "andrew@88plug.com" },
+      "homepage": "https://github.com/88plug/os-control-mcp",
+      "license": "FSL-1.1-ALv2",
+      "category": "productivity",
+      "tags": ["type:mcp", "linux", "systemd", "dbus", "journald", "logind", "devops"]
+    }
+  ]
+}
