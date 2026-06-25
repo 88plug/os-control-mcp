@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "os-control-mcp",
   "displayName": "os-control-mcp",
-  "description": "The sanctioned OS 'motor cortex' for an agent on a Linux box: control systemd services/timers, query journald, read host resources/processes, send desktop notifications, drive D-Bus, and manage power (suspend/reboot/poweroff) — all through structured interfaces (systemctl/loginctl/journalctl/busctl), never raw PID hacks. Pure standard library, zero pip deps. A self-preservation guard refuses severing actions on units the agent depends on (dbus, logind, sshd, network, tailscaled, the session, goosed) unless force=true. Ships the MCP server plus a control-os skill. The system-service counterpart to screen-mcp's GUI control.",
+  "description": "The sanctioned OS 'motor cortex' for an agent on a Linux box: control systemd services/timers, query journald, read host resources/processes, send desktop notifications, drive D-Bus, and manage power (suspend/reboot/poweroff) \u2014 all through structured interfaces (systemctl/loginctl/journalctl/busctl), never raw PID hacks. Pure standard library, zero pip deps. A self-preservation guard refuses severing actions on units the agent depends on (dbus, logind, sshd, network, tailscaled, the session, goosed) unless force=true. Ships the MCP server plus a control-os skill. The system-service counterpart to screen-mcp's GUI control.",
   "author": {
     "name": "88plug",
     "email": "andrew@88plug.com"
@@ -36,5 +36,7 @@
     "os": {
       "command": "${CLAUDE_PLUGIN_ROOT}/bin/os-control-mcp"
     }
-  }
+  },
+  "version": "0.2.0",
+  "defaultEnabled": false
 }

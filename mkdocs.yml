@@ -1,0 +1,41 @@
+site_name: os-control-mcp
+site_description: "The sanctioned OS motor cortex for an agent on a Linux box: control systemd, logind, journald, and D-Bus through structured interfaces."
+site_url: https://88plug.github.io/os-control-mcp/
+repo_url: https://github.com/88plug/os-control-mcp
+repo_name: 88plug/os-control-mcp
+edit_uri: edit/main/docs/
+use_directory_urls: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections   # group nav by section, uses width well
+    - navigation.top        # back-to-top button
+    - navigation.instant    # SPA-style fast page loads
+    - content.code.copy     # copy button on code blocks (needs superfences below)
+    - search.suggest
+  palette:
+    # Light/dark toggle that follows the OS preference by default.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - footnotes
+  - tables
+  - pymdownx.highlight     # code highlighting (ships with mkdocs-material)
+  - pymdownx.superfences   # required for content.code.copy + nested fences
+  - pymdownx.details       # collapsible <details> admonitions
+  - toc:
+      permalink: true
