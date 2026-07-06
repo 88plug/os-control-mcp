@@ -952,7 +952,7 @@ def main():
             args = msg.get("params", {}).get("arguments", {}) or {}
             handler = HANDLERS.get(name)
             if not handler:
-                reply(mid, error={"code": -32601, "message": f"unknown tool: {name}"})
+                reply(mid, result={"content": [{"type": "text", "text": f"unknown tool: {name}"}], "isError": True})
                 continue
             try:
                 reply(mid, handler(args))
