@@ -3,7 +3,10 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
 *.egg-info/
+site/
+uv.lock
 
 # real eval/corpus data — never commit
 eval_real_corpus.json
