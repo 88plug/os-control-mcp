@@ -28,9 +28,18 @@ Design:
   * scope=system|user wherever systemd applies; system mutations use sudo -n when
     euid != 0 (or polkit), and say so plainly when neither is available.
 """
-import sys, os, json, time, shutil, subprocess, shlex, glob
+
+import sys
+import os
+import json
+import time
+import shutil
+import subprocess
+import shlex
+import glob
 
 __version__ = "2026.6.25"
+
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -44,6 +53,7 @@ def _state_dir():
         pass
     return d
 
+
 def log(msg):
     try:
         with open(os.path.join(_state_dir(), "err.log"), "a") as f:
@@ -51,43 +61,65 @@ def log(msg):
     except Exception:
         pass
 
+
 def audit(tool, args, outcome):
     """Append-only record of every mutating call."""
     try:
-        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "tool": tool,
-               "args": args, "outcome": outcome[:300]}
+        rec = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "tool": tool,
+            "args": args,
+            "outcome": outcome[:300],
+        }
         with open(os.path.join(_state_dir(), "audit.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
     except Exception:
         pass
 
+
 def _txt(s):
     return {"type": "text", "text": s}
+
 
 def ok(s):
     return {"content": [_txt(s)]}
 
+
 def err(s):
     return {"content": [_txt(s)], "isError": True}
+
 
 def have(b):
     return shutil.which(b) is not None
 
+
 def run(cmd, timeout=25, input_text=None):
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           input=input_text)
+        p = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, input=input_text
+        )
         return p.returncode, p.stdout, p.stderr
     except FileNotFoundError:
         return 127, "", f"{cmd[0]}: not found"
     except subprocess.TimeoutExpired:
-        return 124, "", f"timed out after {timeout}s: {' '.join(shlex.quote(c) for c in cmd)}"
+        return (
+            124,
+            "",
+            f"timed out after {timeout}s: {' '.join(shlex.quote(c) for c in cmd)}",
+        )
+
 
 def _cmdstr(cmd):
     return " ".join(shlex.quote(c) for c in cmd)
 
+
 def _trunc(s, n=8000):
-    return s if len(s) <= n else s[:n] + f"\n… (truncated; {len(s) - n} more chars — narrow your query)"
+    return (
+        s
+        if len(s) <= n
+        else s[:n] + f"\n… (truncated; {len(s) - n} more chars — narrow your query)"
+    )
+
 
 def _priv_prefix(binary, privileged):
     """Prefix for a privileged system command when not root."""
@@ -97,44 +129,82 @@ def _priv_prefix(binary, privileged):
         return [binary], f"{binary}: needs root and `sudo` is not installed"
     return [binary], None
 
+
 def _priv_hint(e):
     if "password is required" in e or "a password is required" in e or "sudo:" in e:
-        return "\n(needs root: run as root, configure passwordless sudo, or a polkit rule)"
+        return (
+            "\n(needs root: run as root, configure passwordless sudo, or a polkit rule)"
+        )
     if "Interactive authentication required" in e:
         return "\n(polkit wants interactive auth — unavailable headless; run as root or add a polkit rule)"
     return ""
+
 
 # --------------------------------------------------------------------------- #
 # safety layers
 # --------------------------------------------------------------------------- #
 # Layer 1 — absolute floor: severing these is refused EVEN with force.
-CRITICAL_FLOOR = ("dbus.service", "dbus-broker.service", "systemd-logind.service",
-                  "init.scope", "-.slice", "basic.target", "sysinit.target")
+CRITICAL_FLOOR = (
+    "dbus.service",
+    "dbus-broker.service",
+    "systemd-logind.service",
+    "init.scope",
+    "-.slice",
+    "basic.target",
+    "sysinit.target",
+)
 # Layer 2 — force-overridable: units the agent stands on.
 PROTECTED_TOKENS = (
-    "dbus", "dbus-broker", "systemd-logind", "systemd-journald", "systemd-udevd",
-    "systemd-resolved", "systemd-networkd", "NetworkManager", "wpa_supplicant",
-    "iwd", "systemd-user-sessions", "user@", "user-runtime-dir",
-    "ssh", "sshd", "tailscaled", "tailscale", "wg-quick", "zerotier",
-    "polkit", "getty", "serial-getty", "rescue", "emergency", "goosed", "goose",
+    "dbus",
+    "dbus-broker",
+    "systemd-logind",
+    "systemd-journald",
+    "systemd-udevd",
+    "systemd-resolved",
+    "systemd-networkd",
+    "NetworkManager",
+    "wpa_supplicant",
+    "iwd",
+    "systemd-user-sessions",
+    "user@",
+    "user-runtime-dir",
+    "ssh",
+    "sshd",
+    "tailscaled",
+    "tailscale",
+    "wg-quick",
+    "zerotier",
+    "polkit",
+    "getty",
+    "serial-getty",
+    "rescue",
+    "emergency",
+    "goosed",
+    "goose",
 )
 SEVERING_ACTIONS = {"stop", "kill", "restart", "try-restart", "disable", "mask"}
+
 
 def is_protected(unit):
     u = (unit or "").lower()
     return any(t.lower() in u for t in PROTECTED_TOKENS)
 
+
 def is_floor(unit):
     return (unit or "") in CRITICAL_FLOOR
+
 
 # --------------------------------------------------------------------------- #
 # Human-In-the-Loop — a HUMAN approves destructive actions via MCP elicitation,
 # not the model self-setting force/confirm. The flags are only the fallback for
 # clients with no elicitation channel.
 # --------------------------------------------------------------------------- #
-ELICIT_OK = False  # set True at initialize when the client declares elicitation capability
+ELICIT_OK = (
+    False  # set True at initialize when the client declares elicitation capability
+)
 REQUIRE_HUMAN = os.environ.get("OSCTL_REQUIRE_HUMAN") == "1"
 _elicit_seq = [9000]
+
 
 def elicit(message):
     """Ask the human via MCP elicitation/create. Returns 'accept' | 'decline' |
@@ -143,12 +213,26 @@ def elicit(message):
         return None
     _elicit_seq[0] += 1
     rid = f"osctl-elicit-{_elicit_seq[0]}"
-    req = {"jsonrpc": "2.0", "id": rid, "method": "elicitation/create",
-           "params": {"message": message,
-                      "requestedSchema": {"type": "object", "required": ["approve"],
-                          "properties": {"approve": {"type": "boolean",
-                              "description": "Approve this action on the host?"}}}}}
-    sys.stdout.write(json.dumps(req) + "\n"); sys.stdout.flush()
+    req = {
+        "jsonrpc": "2.0",
+        "id": rid,
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "required": ["approve"],
+                "properties": {
+                    "approve": {
+                        "type": "boolean",
+                        "description": "Approve this action on the host?",
+                    }
+                },
+            },
+        },
+    }
+    sys.stdout.write(json.dumps(req) + "\n")
+    sys.stdout.flush()
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -166,18 +250,24 @@ def elicit(message):
             return "decline"
         res = msg.get("result") or {}
         if res.get("action") == "accept":
-            return "accept" if (res.get("content") or {}).get("approve", True) else "decline"
+            return (
+                "accept"
+                if (res.get("content") or {}).get("approve", True)
+                else "decline"
+            )
         return res.get("action") or "decline"
+
 
 def approval_path():
     return "human" if ELICIT_OK else ("require-human" if REQUIRE_HUMAN else "flag")
 
+
 def require_human(desc, flag_name, args, *, floor=False, headless_allow=False):
     """The HIL gate. Returns None to proceed, or an err(...) to block.
-      * hard floor      -> always blocked (no override).
-      * elicitation on  -> the HUMAN decides; the model's flag is IGNORED (authority).
-      * elicitation off -> OSCTL_REQUIRE_HUMAN blocks; else proceed if headless_allow
-                           (low self-risk, nobody to ask) or the flag is set."""
+    * hard floor      -> always blocked (no override).
+    * elicitation on  -> the HUMAN decides; the model's flag is IGNORED (authority).
+    * elicitation off -> OSCTL_REQUIRE_HUMAN blocks; else proceed if headless_allow
+                         (low self-risk, nobody to ask) or the flag is set."""
     if floor:
         return err(f"REFUSED (hard floor): {desc}. Never permitted — not bypassable.")
     verdict = elicit(f"os-control-mcp needs human approval:\n\n  {desc}\n\nApprove?")
@@ -187,14 +277,19 @@ def require_human(desc, flag_name, args, *, floor=False, headless_allow=False):
         return err(f"DENIED by human: {desc}")
     # verdict is None -> client has no elicitation channel
     if REQUIRE_HUMAN:
-        return err(f"REFUSED: {desc} requires human approval, but this client has no MCP "
-                   f"elicitation capability and OSCTL_REQUIRE_HUMAN=1 (no flag fallback).")
+        return err(
+            f"REFUSED: {desc} requires human approval, but this client has no MCP "
+            f"elicitation capability and OSCTL_REQUIRE_HUMAN=1 (no flag fallback)."
+        )
     if headless_allow:
         return None
     if args.get(flag_name):
         return None
-    return err(f"REFUSED: {desc}. No human-approval channel (client lacks MCP elicitation); "
-               f"pass {flag_name}=true to proceed, or dry_run=true to preview.")
+    return err(
+        f"REFUSED: {desc}. No human-approval channel (client lacks MCP elicitation); "
+        f"pass {flag_name}=true to proceed, or dry_run=true to preview."
+    )
+
 
 # --------------------------------------------------------------------------- #
 # systemd
@@ -206,6 +301,7 @@ def _sc(scope, privileged):
     pre, e = _priv_prefix("systemctl", privileged)
     return pre, e
 
+
 def h_services(a):
     scope = a.get("scope", "system")
     op = a.get("op", "list")
@@ -216,13 +312,19 @@ def h_services(a):
     if op == "status" or (op == "list" and unit):
         if not unit:
             return err("op=status needs `unit`")
-        rc, out, e = run(base + ["status", "--no-pager", "--lines",
-                                 str(int(a.get("lines", 12))), unit])
+        rc, out, e = run(
+            base
+            + ["status", "--no-pager", "--lines", str(int(a.get("lines", 12))), unit]
+        )
         return ok(_trunc(out.strip() or e.strip() or f"no status for {unit}"))
     if op == "show":
         if not unit:
             return err("op=show needs `unit`")
-        rc, out, e = run(base + ["show", unit] + (["-p", a["properties"]] if a.get("properties") else []))
+        rc, out, e = run(
+            base
+            + ["show", unit]
+            + (["-p", a["properties"]] if a.get("properties") else [])
+        )
         return ok(_trunc(out.strip() or e.strip()))
     if op == "cat":
         if not unit:
@@ -238,28 +340,52 @@ def h_services(a):
         rc, out, e = run(base + flags)
         return ok(_trunc(out.strip() or e.strip()))
     if op == "files":
-        rc, out, e = run(base + ["list-unit-files", "--no-pager", "--no-legend",
-                                 "--type", a.get("type", "service")])
-        rows = [l for l in out.splitlines() if l.strip()]
+        rc, out, e = run(
+            base
+            + [
+                "list-unit-files",
+                "--no-pager",
+                "--no-legend",
+                "--type",
+                a.get("type", "service"),
+            ]
+        )
+        rows = [line for line in out.splitlines() if line.strip()]
         pat = a.get("pattern")
         if pat:
             rows = [r for r in rows if pat.lower() in r.lower()]
-        return ok(_trunc("\n".join(rows[:int(a.get("limit", 80))]) or "no unit files"))
+        return ok(_trunc("\n".join(rows[: int(a.get("limit", 80))]) or "no unit files"))
     # default: list
-    cmd = base + ["list-units", "--no-pager", "--no-legend", "--all",
-                  "--type", a.get("type", "service")]
+    cmd = base + [
+        "list-units",
+        "--no-pager",
+        "--no-legend",
+        "--all",
+        "--type",
+        a.get("type", "service"),
+    ]
     if a.get("state"):
         cmd += ["--state", a["state"]]
     rc, out, e = run(cmd)
-    rows = [l for l in out.splitlines() if l.strip()]
+    rows = [line for line in out.splitlines() if line.strip()]
     pat = a.get("pattern")
     if pat:
         rows = [r for r in rows if pat.lower() in r.lower()]
     limit = int(a.get("limit", 60))
-    extra = f"\n… {len(rows) - limit} more (raise limit or refine pattern)" if len(rows) > limit else ""
-    return ok(f"{scope} units ({len(rows)} matched):\n" + ("\n".join(rows[:limit]) or e.strip() or "none") + extra)
+    extra = (
+        f"\n… {len(rows) - limit} more (raise limit or refine pattern)"
+        if len(rows) > limit
+        else ""
+    )
+    return ok(
+        f"{scope} units ({len(rows)} matched):\n"
+        + ("\n".join(rows[:limit]) or e.strip() or "none")
+        + extra
+    )
+
 
 _NOUNIT_ACTIONS = {"daemon-reload", "daemon-reexec"}
+
 
 def h_service(a):
     action = a.get("action")
@@ -275,31 +401,46 @@ def h_service(a):
             return err(f"os_service `{action}` requires `unit` (string or list)")
         units = u if isinstance(u, list) else [u]
     sever = action in SEVERING_ACTIONS
-    for unit in units:                       # hard floor first — never overridable
+    for unit in units:  # hard floor first — never overridable
         if sever and is_floor(unit):
-            return err(f"REFUSED (hard floor): `{action} {unit}` would sever the agent's "
-                       f"absolute substrate. Never permitted — not bypassable.")
+            return err(
+                f"REFUSED (hard floor): `{action} {unit}` would sever the agent's "
+                f"absolute substrate. Never permitted — not bypassable."
+            )
     base, gerr = _sc(scope, True)
     if gerr:
         return err(gerr)
     cmd = base + [action] + units
     if dry:
         return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
-    if sever:                                # HIL gate on every severing action
+    if sever:  # HIL gate on every severing action
         protected = any(is_protected(u) for u in units)
-        risk = ("a unit the agent DEPENDS ON (bus/session/network/remote access)"
-                if protected else "a running service")
-        block = require_human(f"{action} {' '.join(units)} on {os.uname().nodename} — {risk}",
-                              "force", a, headless_allow=not protected)
+        risk = (
+            "a unit the agent DEPENDS ON (bus/session/network/remote access)"
+            if protected
+            else "a running service"
+        )
+        block = require_human(
+            f"{action} {' '.join(units)} on {os.uname().nodename} — {risk}",
+            "force",
+            a,
+            headless_allow=not protected,
+        )
         if block:
             return block
     rc, out, e = run(cmd, timeout=60)
     msg = (out + e).strip()
-    audit("os_service", {"action": action, "units": units, "scope": scope,
-                         "approval": approval_path()}, f"rc={rc} {msg[:160]}")
+    audit(
+        "os_service",
+        {"action": action, "units": units, "scope": scope, "approval": approval_path()},
+        f"rc={rc} {msg[:160]}",
+    )
     if rc != 0:
         return err(f"{action} {' '.join(units)} failed (rc {rc}): {msg}{_priv_hint(e)}")
-    return ok(f"{action} {' '.join(units) or '(manager)'}: OK{(' — ' + msg) if msg else ''}")
+    return ok(
+        f"{action} {' '.join(units) or '(manager)'}: OK{(' — ' + msg) if msg else ''}"
+    )
+
 
 def h_wait(a):
     unit = a.get("unit")
@@ -318,12 +459,20 @@ def h_wait(a):
         last = out.strip()
         if target == "active" and last == "active":
             return ok(f"{unit} is active")
-        if target == "inactive" and last in ("inactive", "failed", "unknown", "deactivating"):
+        if target == "inactive" and last in (
+            "inactive",
+            "failed",
+            "unknown",
+            "deactivating",
+        ):
             return ok(f"{unit} is {last}")
         if target == "failed" and last == "failed":
             return ok(f"{unit} is failed")
         time.sleep(1)
-    return err(f"timeout: {unit} did not reach '{target}' within {timeout}s (last: {last or 'unknown'})")
+    return err(
+        f"timeout: {unit} did not reach '{target}' within {timeout}s (last: {last or 'unknown'})"
+    )
+
 
 # --------------------------------------------------------------------------- #
 # journald
@@ -338,8 +487,13 @@ def h_journal(a):
     if a.get("boots"):
         rc, out, e = run(base + ["--no-pager", "--list-boots"], timeout=15)
         return ok(_trunc(out.strip() or e.strip() or "no boots"))
-    cmd = base + ["--no-pager", "-o", a.get("output", "short"),
-                  "-n", str(int(a.get("lines", 50)))]
+    cmd = base + [
+        "--no-pager",
+        "-o",
+        a.get("output", "short"),
+        "-n",
+        str(int(a.get("lines", 50))),
+    ]
     if a.get("unit"):
         cmd += ["-u", a["unit"]]
     if a.get("kernel"):
@@ -351,17 +505,18 @@ def h_journal(a):
     if a.get("priority") is not None:
         cmd += ["-p", str(a["priority"])]
     if a.get("grep"):
-        cmd += ["--grep", a["grep"]]          # server-side PCRE
+        cmd += ["--grep", a["grep"]]  # server-side PCRE
     if a.get("boot"):
         cmd += ["-b"]
     if a.get("fields"):
         cmd += ["-N"]
-    for m in (a.get("match") or []):          # FIELD=value terms
+    for m in a.get("match") or []:  # FIELD=value terms
         cmd.append(str(m))
     rc, out, e = run(cmd, timeout=30)
     if rc != 0 and not out:
         return err(f"journalctl failed (rc {rc}): {e.strip()}")
     return ok(_trunc(out.strip() or "(no log lines matched)"))
+
 
 # --------------------------------------------------------------------------- #
 # resources / processes / sensing
@@ -374,27 +529,53 @@ def h_resources(a):
     rc, mo, _ = run(["free", "-h"], 5)
     if rc == 0:
         out.append(mo.strip())
-    rc, do, _ = run(["df", "-h", "--output=target,size,used,avail,pcent",
-                     "-x", "tmpfs", "-x", "devtmpfs"], 8)
+    rc, do, _ = run(
+        [
+            "df",
+            "-h",
+            "--output=target,size,used,avail,pcent",
+            "-x",
+            "tmpfs",
+            "-x",
+            "devtmpfs",
+        ],
+        8,
+    )
     if rc == 0:
         out.append(do.strip())
     if a.get("unit"):
-        rc, so, _ = run(["systemctl", "show", a["unit"], "-p",
-                         "MemoryCurrent,MemoryPeak,CPUUsageNSec,TasksCurrent,ActiveState"], 8)
+        rc, so, _ = run(
+            [
+                "systemctl",
+                "show",
+                a["unit"],
+                "-p",
+                "MemoryCurrent,MemoryPeak,CPUUsageNSec,TasksCurrent,ActiveState",
+            ],
+            8,
+        )
         if rc == 0:
             out.append(f"unit {a['unit']}:\n" + so.strip())
     return ok("\n\n".join(out) or "no resource data")
 
+
 def h_processes(a):
     sort = "-%cpu" if a.get("by", "cpu") == "cpu" else "-%mem"
     n = int(a.get("limit", 15))
-    rc, out, e = run(["ps", "-eo", "pid,ppid,user,%cpu,%mem,rss,stat,comm", "--sort", sort], 15)
+    rc, out, e = run(
+        ["ps", "-eo", "pid,ppid,user,%cpu,%mem,rss,stat,comm", "--sort", sort], 15
+    )
     if rc != 0:
         return err(f"ps failed: {e.strip()}")
     rows = out.splitlines()
     pat = a.get("pattern")
-    head = ([rows[0]] + [r for r in rows[1:] if pat.lower() in r.lower()][:n]) if pat else rows[:n + 1]
+    head = (
+        ([rows[0]] + [r for r in rows[1:] if pat.lower() in r.lower()][:n])
+        if pat
+        else rows[: n + 1]
+    )
     return ok("\n".join(head))
+
 
 def h_pressure(a):
     out = []
@@ -408,8 +589,11 @@ def h_pressure(a):
             out.append(f"{r}: <error {ex}>")
     return ok("\n".join(out))
 
+
 def h_net(a):
-    op = a.get("op")  # default/None -> sockets (back-compat with summary/listening/pattern)
+    op = a.get(
+        "op"
+    )  # default/None -> sockets (back-compat with summary/listening/pattern)
     if op in (None, "sockets"):
         if not have("ss"):
             return err("ss not available (install iproute2)")
@@ -426,12 +610,16 @@ def h_net(a):
     if op in ("addr", "links", "routes"):
         if not have("ip"):
             return err("ip not available (install iproute2)")
-        argv = {"addr": ["-br", "addr"], "links": ["-br", "link"], "routes": ["route"]}[op]
+        argv = {"addr": ["-br", "addr"], "links": ["-br", "link"], "routes": ["route"]}[
+            op
+        ]
         rc, out, e = run(["ip"] + argv, 8)
         return ok(_trunc(out.strip() or e.strip() or "(none)"))
     if op == "wifi":
         if have("nmcli"):
-            rc, out, e = run(["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "dev", "wifi"], 10)
+            rc, out, e = run(
+                ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "dev", "wifi"], 10
+            )
             return ok(_trunc(out.strip() or e.strip() or "no wifi networks"))
         if have("iw"):
             rc, out, e = run(["iw", "dev"], 10)
@@ -442,8 +630,11 @@ def h_net(a):
             return err("nmcli not available (NetworkManager)")
         rc, d, _ = run(["nmcli", "-t", "device", "status"], 10)
         rc2, c, _ = run(["nmcli", "-t", "connection", "show", "--active"], 10)
-        return ok(_trunc((d.strip() + "\n--- active connections ---\n" + c.strip()).strip()))
+        return ok(
+            _trunc((d.strip() + "\n--- active connections ---\n" + c.strip()).strip())
+        )
     return err("op must be sockets|addr|links|routes|wifi|nm")
+
 
 # --------------------------------------------------------------------------- #
 # observe: containers / disk / hardware  (read-only; from real-session log mining)
@@ -453,6 +644,7 @@ def _container_cli(pref=None):
         if c and have(c):
             return c
     return None
+
 
 def h_containers(a):
     cli = _container_cli(a.get("engine"))
@@ -481,11 +673,21 @@ def h_containers(a):
         rc, out, e = run([cli, "inspect", name], 15)
         return ok(_trunc(out.strip() or e.strip()))
     if op == "stats":
-        rc, out, e = run([cli, "stats", "--no-stream", "--format",
-                          "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"], 25)
+        rc, out, e = run(
+            [
+                cli,
+                "stats",
+                "--no-stream",
+                "--format",
+                "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}",
+            ],
+            25,
+        )
         return ok(_trunc(out.strip() or e.strip() or "no running containers"))
     if op == "images":
-        rc, out, e = run([cli, "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}"], 15)
+        rc, out, e = run(
+            [cli, "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}"], 15
+        )
         return ok(_trunc(out.strip() or e.strip() or "no images"))
     if op == "compose":
         if cli != "docker":
@@ -494,6 +696,7 @@ def h_containers(a):
         return ok(_trunc(out.strip() or e.strip() or "no compose projects"))
     return err("op must be ps|logs|inspect|stats|images|compose")
 
+
 def _human_bytes(n):
     for u in ("B", "K", "M", "G", "T"):
         if n < 1024:
@@ -501,15 +704,30 @@ def _human_bytes(n):
         n /= 1024
     return f"{n:.0f}P"
 
+
 def h_disk(a):
     op = a.get("op", "usage")
     if op == "usage":
-        rc, out, e = run(["df", "-h", "--output=source,fstype,size,used,avail,pcent,target",
-                          "-x", "tmpfs", "-x", "devtmpfs", "-x", "squashfs"], 8)
+        rc, out, e = run(
+            [
+                "df",
+                "-h",
+                "--output=source,fstype,size,used,avail,pcent,target",
+                "-x",
+                "tmpfs",
+                "-x",
+                "devtmpfs",
+                "-x",
+                "squashfs",
+            ],
+            8,
+        )
         return ok(_trunc(out.strip() or e.strip()))
     if op == "du":
         path = a.get("path") or "."
-        rc, out, e = run(["du", "-B1", "--max-depth", str(int(a.get("depth", 1))), path], 45)
+        rc, out, e = run(
+            ["du", "-B1", "--max-depth", str(int(a.get("depth", 1))), path], 45
+        )
         if rc != 0 and not out:
             return err(f"du failed: {e.strip()}")
         items = []
@@ -520,7 +738,9 @@ def h_disk(a):
             except Exception:
                 pass
         items.sort(reverse=True)
-        rows = [f"{_human_bytes(b):>7}  {p}" for b, p in items[:int(a.get("limit", 20))]]
+        rows = [
+            f"{_human_bytes(b):>7}  {p}" for b, p in items[: int(a.get("limit", 20))]
+        ]
         return ok(_trunc("\n".join(rows) or "(empty)"))
     if op == "blocks":
         if not have("lsblk"):
@@ -529,11 +749,14 @@ def h_disk(a):
         return ok(_trunc(out.strip() or e.strip()))
     if op == "mounts":
         if have("findmnt"):
-            rc, out, e = run(["findmnt", "--real", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"], 10)
+            rc, out, e = run(
+                ["findmnt", "--real", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"], 10
+            )
         else:
             rc, out, e = run(["mount"], 10)
         return ok(_trunc(out.strip() or e.strip()))
     return err("op must be usage|du|blocks|mounts")
+
 
 def h_hardware(a):
     op = a.get("op", "summary")
@@ -553,16 +776,29 @@ def h_hardware(a):
     if op == "gpu":
         out = []
         if have("nvidia-smi"):
-            rc, o, _ = run(["nvidia-smi", "--query-gpu=name,memory.total,memory.used,"
-                            "utilization.gpu,temperature.gpu", "--format=csv,noheader"], 10)
+            rc, o, _ = run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=name,memory.total,memory.used,"
+                    "utilization.gpu,temperature.gpu",
+                    "--format=csv,noheader",
+                ],
+                10,
+            )
             if rc == 0 and o.strip():
                 out.append("NVIDIA: " + "; ".join(o.split("\n")))
         if have("lspci"):
             rc, o, _ = run(["lspci"], 10)
-            vid = [l for l in o.splitlines() if any(k in l for k in ("VGA", "3D", "Display"))]
+            vid = [
+                line
+                for line in o.splitlines()
+                if any(k in line for k in ("VGA", "3D", "Display"))
+            ]
             if vid:
                 out.append("PCI display:\n" + "\n".join(vid))
-        cards = [os.path.basename(c) for c in sorted(glob.glob("/sys/class/drm/card[0-9]"))]
+        cards = [
+            os.path.basename(c) for c in sorted(glob.glob("/sys/class/drm/card[0-9]"))
+        ]
         if cards:
             out.append("DRM cards: " + ", ".join(cards))
         return ok(_trunc("\n\n".join(out) or "no GPU info"))
@@ -572,14 +808,25 @@ def h_hardware(a):
     out.append(o.strip())
     if have("lscpu"):
         rc, o, _ = run(["lscpu"], 8)
-        keep = ("Model name", "Architecture", "CPU(s)", "Socket(s)",
-                "Core(s) per socket", "Thread(s) per core")
-        out.append("\n".join(l for l in o.splitlines() if l.split(":")[0].strip() in keep))
+        keep = (
+            "Model name",
+            "Architecture",
+            "CPU(s)",
+            "Socket(s)",
+            "Core(s) per socket",
+            "Thread(s) per core",
+        )
+        out.append(
+            "\n".join(
+                line for line in o.splitlines() if line.split(":")[0].strip() in keep
+            )
+        )
     rc, o, _ = run(["free", "-h"], 5)
     if o:
-        mem = [l for l in o.splitlines() if l.lower().startswith("mem")]
+        mem = [line for line in o.splitlines() if line.lower().startswith("mem")]
         out += mem
     return ok(_trunc("\n".join(x for x in out if x)))
+
 
 def h_sensors(a):
     out = []
@@ -587,7 +834,7 @@ def h_sensors(a):
         try:
             t = open(os.path.join(zone, "type")).read().strip()
             mC = int(open(os.path.join(zone, "temp")).read().strip())
-            out.append(f"{os.path.basename(zone)} {t}: {mC/1000:.1f}°C")
+            out.append(f"{os.path.basename(zone)} {t}: {mC / 1000:.1f}°C")
         except Exception:
             pass
     if have("sensors") and a.get("full"):
@@ -596,17 +843,32 @@ def h_sensors(a):
             out.append(so.strip())
     return ok("\n".join(out) or "no thermal zones found")
 
+
 # --------------------------------------------------------------------------- #
 # power / sessions / machine settings
 # --------------------------------------------------------------------------- #
 def h_power(a):
     action = a.get("action", "")
-    valid = {"suspend", "hibernate", "hybrid-sleep", "suspend-then-hibernate",
-             "reboot", "poweroff", "halt"}
+    valid = {
+        "suspend",
+        "hibernate",
+        "hybrid-sleep",
+        "suspend-then-hibernate",
+        "reboot",
+        "poweroff",
+        "halt",
+    }
     if action not in valid:
         return err(f"action must be one of: {', '.join(sorted(valid))}")
-    tool = "loginctl" if (have("loginctl") and action in {
-        "suspend", "hibernate", "hybrid-sleep", "suspend-then-hibernate"}) else "systemctl"
+    tool = (
+        "loginctl"
+        if (
+            have("loginctl")
+            and action
+            in {"suspend", "hibernate", "hybrid-sleep", "suspend-then-hibernate"}
+        )
+        else "systemctl"
+    )
     base = [tool]
     if os.geteuid() != 0 and have("sudo"):
         base = ["sudo", "-n", tool]
@@ -615,20 +877,31 @@ def h_power(a):
         return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
     cap = ""
     if have("systemctl"):
-        verb = {"poweroff": "can-poweroff", "reboot": "can-reboot", "suspend": "can-suspend",
-                "hibernate": "can-hibernate", "halt": "can-halt"}.get(action)
+        verb = {
+            "poweroff": "can-poweroff",
+            "reboot": "can-reboot",
+            "suspend": "can-suspend",
+            "hibernate": "can-hibernate",
+            "halt": "can-halt",
+        }.get(action)
         if verb:
             _, co, _ = run(["systemctl", verb], 6)
             cap = f" [{verb}: {co.strip() or 'unknown'}]"
-    block = require_human(f"{action} {os.uname().nodename} — IRREVERSIBLE/disruptive{cap}",
-                          "confirm", a)
+    block = require_human(
+        f"{action} {os.uname().nodename} — IRREVERSIBLE/disruptive{cap}", "confirm", a
+    )
     if block:
         return block
     rc, out, e = run(cmd, 20)
-    audit("os_power", {"action": action, "approval": approval_path()}, f"rc={rc} {(out + e).strip()[:120]}")
+    audit(
+        "os_power",
+        {"action": action, "approval": approval_path()},
+        f"rc={rc} {(out + e).strip()[:120]}",
+    )
     if rc != 0:
         return err(f"{action} failed (rc {rc}): {(out + e).strip()}{_priv_hint(e)}")
     return ok(f"{action}: requested")
+
 
 def h_session(a):
     if not have("loginctl"):
@@ -651,6 +924,7 @@ def h_session(a):
         return err("op must be list-sessions|list-users|session-status|inhibitors")
     return ok(_trunc(out.strip() or e.strip() or "(none)"))
 
+
 def _machine_tool(a, binary, status_args, set_map, label):
     """Shared pattern for timedatectl/hostnamectl/localectl: op=status|set-*."""
     if not have(binary):
@@ -665,7 +939,7 @@ def _machine_tool(a, binary, status_args, set_map, label):
         val = a.get("value")
         if need_val and val is None:
             return err(f"op={op} needs `value`")
-        if not is_write:                       # list-* etc. are read-only — no gate
+        if not is_write:  # list-* etc. are read-only — no gate
             rc, out, e = run([binary] + argv, 12)
             return ok(_trunc(out.strip() or e.strip() or "(empty)"))
         base, gerr = _priv_prefix(binary, True)
@@ -674,36 +948,62 @@ def _machine_tool(a, binary, status_args, set_map, label):
         cmd = base + argv + ([str(val)] if need_val else [])
         if bool(a.get("dry_run")):
             return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
-        block = require_human(f"set machine {label}: {op} {val if need_val else ''}".strip(),
-                              "force", a)
+        block = require_human(
+            f"set machine {label}: {op} {val if need_val else ''}".strip(), "force", a
+        )
         if block:
             return block
         rc, out, e = run(cmd, 15)
-        audit(f"os_{label}", {"op": op, "value": val, "approval": approval_path()},
-              f"rc={rc} {(out + e).strip()[:120]}")
+        audit(
+            f"os_{label}",
+            {"op": op, "value": val, "approval": approval_path()},
+            f"rc={rc} {(out + e).strip()[:120]}",
+        )
         if rc != 0:
             return err(f"{op} failed (rc {rc}): {(out + e).strip()}{_priv_hint(e)}")
         return ok(f"{op} {val if need_val else ''}: OK")
     return err(f"op must be status|{'|'.join(set_map)}")
 
+
 def h_time(a):
-    return _machine_tool(a, "timedatectl", ["status"], {
-        "set-timezone": (True, ["set-timezone"]),
-        "set-ntp": (True, ["set-ntp"]),
-        "list-timezones": (False, ["list-timezones", "--no-pager"]),
-    }, "time")
+    return _machine_tool(
+        a,
+        "timedatectl",
+        ["status"],
+        {
+            "set-timezone": (True, ["set-timezone"]),
+            "set-ntp": (True, ["set-ntp"]),
+            "list-timezones": (False, ["list-timezones", "--no-pager"]),
+        },
+        "time",
+    )
+
 
 def h_hostname(a):
-    return _machine_tool(a, "hostnamectl", ["status"], {
-        "set-hostname": (True, ["set-hostname"]),
-    }, "hostname")
+    return _machine_tool(
+        a,
+        "hostnamectl",
+        ["status"],
+        {
+            "set-hostname": (True, ["set-hostname"]),
+        },
+        "hostname",
+    )
+
 
 def h_locale(a):
-    return _machine_tool(a, "localectl", ["status"], {
-        "set-locale": (True, ["set-locale"]),
-        "set-keymap": (True, ["set-keymap"]),
-        "list-locales": (False, ["list-locales", "--no-pager"]),
-    }, "locale")
+    return _machine_tool(
+        a,
+        "localectl",
+        ["status"],
+        {
+            "set-locale": (True, ["set-locale"]),
+            "set-keymap": (True, ["set-keymap"]),
+            "list-locales": (False, ["list-locales", "--no-pager"]),
+        },
+        "locale",
+    )
+
 
 # --------------------------------------------------------------------------- #
 # D-Bus
@@ -714,46 +1014,85 @@ def h_dbus(a):
     op = a.get("op", "list")
     busflag = "--user" if a.get("scope") == "user" else "--system"
     tmo = int(a.get("timeout", 20))
+
     def need(*keys):
         miss = [k for k in keys if not a.get(k)]
-        return f"op={op} needs {', '.join(keys)} (missing {', '.join(miss)})" if miss else None
+        return (
+            f"op={op} needs {', '.join(keys)} (missing {', '.join(miss)})"
+            if miss
+            else None
+        )
+
     if op == "list":
         rc, out, e = run(["busctl", busflag, "--no-pager", "list"], tmo)
     elif op == "tree":
-        if (m := need("service")):
+        if m := need("service"):
             return err(m)
         rc, out, e = run(["busctl", busflag, "--no-pager", "tree", a["service"]], tmo)
     elif op == "introspect":
-        if (m := need("service", "path")):
+        if m := need("service", "path"):
             return err(m)
-        rc, out, e = run(["busctl", busflag, "--no-pager", "introspect", a["service"], a["path"]], tmo)
+        rc, out, e = run(
+            ["busctl", busflag, "--no-pager", "introspect", a["service"], a["path"]],
+            tmo,
+        )
     elif op == "get-property":
-        if (m := need("service", "path", "interface", "member")):
+        if m := need("service", "path", "interface", "member"):
             return err(m)
-        rc, out, e = run(["busctl", busflag, "--no-pager", "get-property",
-                          a["service"], a["path"], a["interface"], a["member"]], tmo)
+        rc, out, e = run(
+            [
+                "busctl",
+                busflag,
+                "--no-pager",
+                "get-property",
+                a["service"],
+                a["path"],
+                a["interface"],
+                a["member"],
+            ],
+            tmo,
+        )
     elif op in ("call", "set-property"):
         keys = ("service", "path", "interface", "member")
-        if (m := need(*keys)):
+        if m := need(*keys):
             return err(m)
-        cmd = ["busctl", busflag, "--no-pager", op, a["service"], a["path"],
-               a["interface"], a["member"]]
+        cmd = [
+            "busctl",
+            busflag,
+            "--no-pager",
+            op,
+            a["service"],
+            a["path"],
+            a["interface"],
+            a["member"],
+        ]
         if a.get("signature"):
             cmd.append(a["signature"])
             cmd += [str(x) for x in (a.get("args") or [])]
         if bool(a.get("dry_run")):
             return ok(f"DRY RUN — would execute:\n  {_cmdstr(cmd)}")
-        block = require_human(f"D-Bus {op} {a['service']} {a['member']} (side effects)", "force", a)
+        block = require_human(
+            f"D-Bus {op} {a['service']} {a['member']} (side effects)", "force", a
+        )
         if block:
             return block
         rc, out, e = run(cmd, tmo)
-        audit("os_dbus", {"op": op, "service": a["service"], "member": a["member"],
-                          "approval": approval_path()}, f"rc={rc} {(out + e).strip()[:120]}")
+        audit(
+            "os_dbus",
+            {
+                "op": op,
+                "service": a["service"],
+                "member": a["member"],
+                "approval": approval_path(),
+            },
+            f"rc={rc} {(out + e).strip()[:120]}",
+        )
     else:
         return err("op must be list|tree|introspect|get-property|set-property|call")
     if rc != 0 and not out:
         return err(f"busctl {op} failed (rc {rc}): {e.strip()}")
     return ok(_trunc(out.strip() or "(empty)"))
+
 
 # --------------------------------------------------------------------------- #
 # notify / diag / reload
@@ -763,22 +1102,69 @@ def h_notify(a):
     body = a.get("body", "")
     urgency = a.get("urgency", "normal")
     if have("notify-send"):
-        rc, _, e = run(["notify-send", "-u", urgency, "-a", "os-control-mcp", summary, body], 10)
-        return ok(f"notification sent: {summary}") if rc == 0 else err(f"notify-send failed: {e.strip()}")
+        rc, _, e = run(
+            ["notify-send", "-u", urgency, "-a", "os-control-mcp", summary, body], 10
+        )
+        return (
+            ok(f"notification sent: {summary}")
+            if rc == 0
+            else err(f"notify-send failed: {e.strip()}")
+        )
     if have("gdbus"):
-        rc, _, e = run(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
-                        "--object-path", "/org/freedesktop/Notifications",
-                        "--method", "org.freedesktop.Notifications.Notify",
-                        "os-control-mcp", "0", "", summary, body, "[]", "{}", "5000"], 10)
-        return ok(f"notification sent: {summary}") if rc == 0 else err(f"gdbus notify failed: {e.strip()}")
+        rc, _, e = run(
+            [
+                "gdbus",
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.Notifications",
+                "--object-path",
+                "/org/freedesktop/Notifications",
+                "--method",
+                "org.freedesktop.Notifications.Notify",
+                "os-control-mcp",
+                "0",
+                "",
+                summary,
+                body,
+                "[]",
+                "{}",
+                "5000",
+            ],
+            10,
+        )
+        return (
+            ok(f"notification sent: {summary}")
+            if rc == 0
+            else err(f"gdbus notify failed: {e.strip()}")
+        )
     return err("no notification backend (install libnotify's notify-send, or gdbus)")
+
 
 def h_diag(a):
     euid = os.geteuid()
-    bins = {b: have(b) for b in ("systemctl", "loginctl", "journalctl", "busctl",
-                                 "timedatectl", "hostnamectl", "localectl", "ss", "ip",
-                                 "lsblk", "lspci", "docker", "podman", "nvidia-smi",
-                                 "notify-send", "gdbus", "sudo")}
+    bins = {
+        b: have(b)
+        for b in (
+            "systemctl",
+            "loginctl",
+            "journalctl",
+            "busctl",
+            "timedatectl",
+            "hostnamectl",
+            "localectl",
+            "ss",
+            "ip",
+            "lsblk",
+            "lspci",
+            "docker",
+            "podman",
+            "nvidia-smi",
+            "notify-send",
+            "gdbus",
+            "sudo",
+        )
+    }
     lines = [
         f"os-control-mcp {__version__}",
         f"euid: {euid} ({'root' if euid == 0 else 'unprivileged — system mutations use sudo -n / polkit'})",
@@ -790,102 +1176,402 @@ def h_diag(a):
     lines.append(f"user manager: {out.strip() or 'n/a'}")
     if have("busctl"):
         rc, out, _ = run(["busctl", "--system", "--no-pager", "list"], 8)
-        lines.append(f"system bus: {'reachable' if rc == 0 else 'unreachable'} ({len(out.splitlines())} names)")
-    hil = ("human-in-the-loop via MCP elicitation" if ELICIT_OK
-           else ("REFUSE (OSCTL_REQUIRE_HUMAN=1, no elicitation)" if REQUIRE_HUMAN
-                 else "flag fallback (client has no elicitation capability)"))
-    lines.append(f"gating: hard floor {len(CRITICAL_FLOOR)} units (never severable) + "
-                 f"{len(PROTECTED_TOKENS)} protected tokens; approval = {hil}")
+        lines.append(
+            f"system bus: {'reachable' if rc == 0 else 'unreachable'} ({len(out.splitlines())} names)"
+        )
+    hil = (
+        "human-in-the-loop via MCP elicitation"
+        if ELICIT_OK
+        else (
+            "REFUSE (OSCTL_REQUIRE_HUMAN=1, no elicitation)"
+            if REQUIRE_HUMAN
+            else "flag fallback (client has no elicitation capability)"
+        )
+    )
+    lines.append(
+        f"gating: hard floor {len(CRITICAL_FLOOR)} units (never severable) + "
+        f"{len(PROTECTED_TOKENS)} protected tokens; approval = {hil}"
+    )
     lines.append(f"audit -> {_state_dir()}/audit.jsonl")
-    lines.append("ethics: enforces The Agent Oath §1,2,3,5,7,11 (human welfare > task; "
-                 "human agency/oversight via HIL) — https://theagentoath.com")
+    lines.append(
+        "ethics: enforces The Agent Oath §1,2,3,5,7,11 (human welfare > task; "
+        "human agency/oversight via HIL) — https://theagentoath.com"
+    )
     return ok("\n".join(lines))
 
+
 def h_reload(a):
-    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}) + "\n")
+    sys.stdout.write(
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+        + "\n"
+    )
     sys.stdout.flush()
     os.execv(sys.executable, [sys.executable] + sys.argv)
+
 
 # --------------------------------------------------------------------------- #
 # catalog
 # --------------------------------------------------------------------------- #
-_SCOPE = {"type": "string", "enum": ["system", "user"], "description": "systemd scope (default system)"}
+_SCOPE = {
+    "type": "string",
+    "enum": ["system", "user"],
+    "description": "systemd scope (default system)",
+}
 _RO = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
 _MUT = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
 
 TOOLS = [
-    {"name": "os_diag", "title": "Diagnostics", "annotations": _RO,
-     "description": "Health dump — run FIRST when anything misbehaves. Use when capture of host control is broken or you need root/binary/safety status. Returns euid, backend binary presence (systemctl/loginctl/journalctl/busctl/timedatectl/hostnamectl/localectl/ss/notify-send/gdbus/sudo), system+user manager state, system-bus reachability, and safety-layer status (hard floor + protected tokens + audit-log path).",
-     "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "os_services", "title": "Inspect Services", "annotations": _RO,
-     "description": "Inspect systemd units (read-only). Use when listing or diagnosing units without mutating. op=list (default; filter type/state/pattern) | status (full `systemctl status` of `unit`) | show (parseable key=value props; `properties` to select) | cat (merged unit + drop-ins) | deps (list-dependencies, `reverse` for reverse) | files (list-unit-files). `scope`=system|user. Returns the op-selected unit inventory or status text.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["list", "status", "show", "cat", "deps", "files"]}, "unit": {"type": "string"}, "type": {"type": "string"}, "state": {"type": "string"}, "pattern": {"type": "string"}, "properties": {"type": "string"}, "reverse": {"type": "boolean"}, "limit": {"type": "number"}, "lines": {"type": "number"}, "scope": _SCOPE}}},
-    {"name": "os_service", "title": "Control Services", "annotations": {**_MUT, "idempotentHint": False},
-     "description": "Run a systemd action: start|stop|restart|reload|try-restart|enable|disable|mask|unmask|kill|reset-failed|revert|daemon-reload|daemon-reexec. Use when changing unit state. `unit` may be a string OR a list (batch); omit it for daemon-reload/daemon-reexec. dry_run=true returns the exact command without running. SAFETY: hard floor refuses severing dbus/logind/init even with force; self-preservation guard refuses severing units the agent depends on unless force=true. System mutations use sudo -n when not root. Every mutation is audit-logged. Returns command result / dry-run preview.",
-     "inputSchema": {"type": "object", "properties": {"unit": {"type": ["string", "array"], "items": {"type": "string"}}, "action": {"type": "string"}, "scope": _SCOPE, "force": {"type": "boolean"}, "dry_run": {"type": "boolean"}}, "required": ["action"]}},
-    {"name": "os_wait", "title": "Wait for Unit State", "annotations": {**_RO, "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
-     "description": "Block until `unit` reaches `state` (active|inactive|failed) or `timeout` seconds (default 30). Use after start/stop instead of guessing a sleep. Returns when the unit matches or on timeout.",
-     "inputSchema": {"type": "object", "properties": {"unit": {"type": "string"}, "state": {"type": "string", "enum": ["active", "inactive", "failed"]}, "timeout": {"type": "number"}, "scope": _SCOPE}, "required": ["unit"]}},
-    {"name": "os_journal", "title": "Query the Journal", "annotations": _RO,
-     "description": "Read journald (journalctl). Use when diagnosing why a unit failed or what the kernel logged. Filters: unit, lines (50), since/until, priority (0-7), grep (server-side PCRE), kernel=true (-k dmesg), boot=true (current boot), boots=true (--list-boots), fields=true (-N field names), match=['_SYSTEMD_UNIT=x','_PID=…'], output (short/json/json-pretty/cat). scope=system|user. Returns matching journal lines.",
-     "inputSchema": {"type": "object", "properties": {"unit": {"type": "string"}, "lines": {"type": "number"}, "since": {"type": "string"}, "until": {"type": "string"}, "priority": {"type": ["string", "number"]}, "grep": {"type": "string"}, "kernel": {"type": "boolean"}, "boot": {"type": "boolean"}, "boots": {"type": "boolean"}, "fields": {"type": "boolean"}, "match": {"type": "array", "items": {"type": "string"}}, "output": {"type": "string"}, "scope": _SCOPE}}},
-    {"name": "os_resources", "title": "Resource Snapshot", "annotations": _RO,
-     "description": "Snapshot host pressure: load avg, memory (`free -h`), disk (`df -h` real fs). Use when diagnosing load/OOM/disk-full. Pass `unit` for that unit's MemoryCurrent/MemoryPeak/CPUUsageNSec/TasksCurrent/ActiveState. Returns structured resource fields.",
-     "inputSchema": {"type": "object", "properties": {"unit": {"type": "string"}}}},
-    {"name": "os_processes", "title": "Top Processes", "annotations": _RO,
-     "description": "List top processes by `by`=cpu|mem (default cpu), `limit` (15), optional `pattern`. Use when finding what is burning CPU/RAM. Returns pid/ppid/user/%cpu/%mem/rss/stat/comm.",
-     "inputSchema": {"type": "object", "properties": {"by": {"type": "string", "enum": ["cpu", "mem"]}, "limit": {"type": "number"}, "pattern": {"type": "string"}}}},
-    {"name": "os_pressure", "title": "PSI Pressure", "annotations": _RO,
-     "description": "Pressure Stall Information from /proc/pressure/{cpu,memory,io} — the real 'is the box starving' signal (some/full avg10/avg60/avg300). Use when load looks fine but the machine feels stuck. Returns PSI some/full averages. Read-only.",
-     "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "os_net", "title": "Network", "annotations": _RO,
-     "description": "Network state (read-only). Use when checking listeners, addresses, routes, wifi, or NetworkManager. op=sockets (default; ss -tulpn listening + owning PID; summary=true→ss -s; listening=false→all; `pattern`) | addr (ip -br addr) | links (ip -br link) | routes (ip route) | wifi (nmcli/iw scan) | nm (NetworkManager device + active connections). Returns the op-selected network snapshot.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["sockets", "addr", "links", "routes", "wifi", "nm"]}, "summary": {"type": "boolean"}, "listening": {"type": "boolean"}, "pattern": {"type": "string"}}}},
-    {"name": "os_sensors", "title": "Thermal Sensors", "annotations": _RO,
-     "description": "Read temperatures from /sys/class/thermal/thermal_zone*. Use when checking thermal throttling or fan issues. full=true also runs `sensors` (lm_sensors) if present. Returns zone names and temps.",
-     "inputSchema": {"type": "object", "properties": {"full": {"type": "boolean"}}}},
-    {"name": "os_containers", "title": "Containers", "annotations": _RO,
-     "description": "Inspect Docker/Podman (read-only). Use when observing containers without docker exec hacks. op=ps (default; all=true for stopped) | logs (`name`, lines, since) | inspect (`name`) | stats (live cpu/mem/net/io) | images | compose (docker compose ls). `engine`=docker|podman (auto-detected). Returns the op-selected container inventory/output.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["ps", "logs", "inspect", "stats", "images", "compose"]}, "name": {"type": "string"}, "all": {"type": "boolean"}, "lines": {"type": "number"}, "since": {"type": "string"}, "engine": {"type": "string", "enum": ["docker", "podman"]}}}},
-    {"name": "os_disk", "title": "Storage", "annotations": _RO,
-     "description": "Storage (read-only). Use when checking free space, large dirs, block devices, or mounts. op=usage (default; df -h real fs) | du (largest dirs under `path`, `depth`, `limit` — sorted) | blocks (lsblk: devices/partitions/fs/mounts) | mounts (findmnt real mounts). Returns the op-selected storage report.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["usage", "du", "blocks", "mounts"]}, "path": {"type": "string"}, "depth": {"type": "number"}, "limit": {"type": "number"}}}},
-    {"name": "os_hardware", "title": "Hardware / GPU", "annotations": _RO,
-     "description": "Hardware inventory (read-only). Use when identifying CPU/GPU/PCI/USB for deploy or diagnostics. op=summary (default; kernel + cpu model + memory) | cpu (lscpu) | pci (lspci; verbose=true→-nnk drivers) | usb (lsusb) | gpu (nvidia-smi + PCI display + /sys/class/drm cards). Returns the op-selected hardware report.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["summary", "cpu", "pci", "usb", "gpu"]}, "verbose": {"type": "boolean"}}}},
-    {"name": "os_power", "title": "Power Control", "annotations": {**_MUT, "idempotentHint": False},
-     "description": "Power state via logind/systemd: suspend|hibernate|hybrid-sleep|suspend-then-hibernate|reboot|poweroff|halt. Use only when the human explicitly wants a power transition. IRREVERSIBLE — refused unless confirm=true (refusal includes systemctl can-* capability probe). dry_run=true previews. sudo -n when not root. Audit-logged. Returns command result or refusal.",
-     "inputSchema": {"type": "object", "properties": {"action": {"type": "string"}, "confirm": {"type": "boolean"}, "dry_run": {"type": "boolean"}}, "required": ["action"]}},
-    {"name": "os_session", "title": "Login Sessions", "annotations": _RO,
-     "description": "logind sessions/users/inhibitors (read-only). Use when checking who is logged in or what blocks sleep. op=list-sessions (default) | list-users | session-status (`id`) | inhibitors (active power/idle/sleep locks via systemd-inhibit --list). Returns the op-selected session report.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["list-sessions", "list-users", "session-status", "inhibitors"]}, "id": {"type": ["string", "number"]}}}},
-    {"name": "os_time", "title": "Time / Timezone / NTP", "annotations": {**_MUT, "destructiveHint": False, "idempotentHint": True},
-     "description": "timedatectl. Use when reading or setting clock/timezone/NTP. op=status (default) | list-timezones | set-timezone (value=Area/City) | set-ntp (value=true|false). Writes need force=true (or dry_run=true) + root/polkit. Audit-logged. Returns status text or write result.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string"}, "value": {"type": ["string", "boolean"]}, "force": {"type": "boolean"}, "dry_run": {"type": "boolean"}}}},
-    {"name": "os_hostname", "title": "Hostname", "annotations": {**_MUT, "destructiveHint": False, "idempotentHint": True},
-     "description": "hostnamectl. Use when reading or setting the machine hostname. op=status (default) | set-hostname (value=NAME). Writes need force=true (or dry_run=true) + root/polkit. Audit-logged. Returns status text or write result.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string"}, "value": {"type": "string"}, "force": {"type": "boolean"}, "dry_run": {"type": "boolean"}}}},
-    {"name": "os_locale", "title": "Locale / Keymap", "annotations": {**_MUT, "destructiveHint": False, "idempotentHint": True},
-     "description": "localectl. Use when reading or setting locale/keymap. op=status (default) | list-locales | set-locale (value=LANG=…) | set-keymap (value=KEYMAP). Writes need force=true (or dry_run=true) + root/polkit. Audit-logged. Returns status text or write result.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string"}, "value": {"type": "string"}, "force": {"type": "boolean"}, "dry_run": {"type": "boolean"}}}},
-    {"name": "os_notify", "title": "Desktop Notification", "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
-     "description": "Send a desktop notification to the logged-in user via the session bus (notify-send, else gdbus). Use when the human should see a non-blocking alert. Args: summary (title), body, urgency=low|normal|critical. Returns success/failure of delivery.",
-     "inputSchema": {"type": "object", "properties": {"summary": {"type": "string"}, "body": {"type": "string"}, "urgency": {"type": "string", "enum": ["low", "normal", "critical"]}}, "required": ["summary"]}},
-    {"name": "os_dbus", "title": "D-Bus", "annotations": {**_MUT, "idempotentHint": False},
-     "description": "D-Bus via busctl. Use for introspect/get-property reads or gated set-property/call writes. op=list | tree (`service`) | introspect (`service`,`path`) | get-property (`service`,`path`,`interface`,`member`) | set-property | call (+ optional `signature`+`args`). scope=system|user. `timeout` secs. set-property/call have side effects → force=true (or dry_run=true). Reads are free. Audit-logged on writes. Returns busctl output or dry-run preview.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string"}, "service": {"type": "string"}, "path": {"type": "string"}, "interface": {"type": "string"}, "member": {"type": "string"}, "signature": {"type": "string"}, "args": {"type": "array"}, "scope": _SCOPE, "timeout": {"type": "number"}, "force": {"type": "boolean"}, "dry_run": {"type": "boolean"}}}},
-    {"name": "os_reload", "title": "Reload Server", "annotations": {**_MUT, "idempotentHint": False},
-     "description": "Hot-reload this MCP server's own code in place (execv). Use after editing the server so new tools take effect without /mcp reconnect. Returns after re-exec; connection is preserved when the host supports it.",
-     "inputSchema": {"type": "object", "properties": {}}},
+    {
+        "name": "os_diag",
+        "title": "Diagnostics",
+        "annotations": _RO,
+        "description": "Health dump — run FIRST when anything misbehaves. Use when capture of host control is broken or you need root/binary/safety status. Returns euid, backend binary presence (systemctl/loginctl/journalctl/busctl/timedatectl/hostnamectl/localectl/ss/notify-send/gdbus/sudo), system+user manager state, system-bus reachability, and safety-layer status (hard floor + protected tokens + audit-log path).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "os_services",
+        "title": "Inspect Services",
+        "annotations": _RO,
+        "description": "Inspect systemd units (read-only). Use when listing or diagnosing units without mutating. op=list (default; filter type/state/pattern) | status (full `systemctl status` of `unit`) | show (parseable key=value props; `properties` to select) | cat (merged unit + drop-ins) | deps (list-dependencies, `reverse` for reverse) | files (list-unit-files). `scope`=system|user. Returns the op-selected unit inventory or status text.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string",
+                    "enum": ["list", "status", "show", "cat", "deps", "files"],
+                },
+                "unit": {"type": "string"},
+                "type": {"type": "string"},
+                "state": {"type": "string"},
+                "pattern": {"type": "string"},
+                "properties": {"type": "string"},
+                "reverse": {"type": "boolean"},
+                "limit": {"type": "number"},
+                "lines": {"type": "number"},
+                "scope": _SCOPE,
+            },
+        },
+    },
+    {
+        "name": "os_service",
+        "title": "Control Services",
+        "annotations": {**_MUT, "idempotentHint": False},
+        "description": "Run a systemd action: start|stop|restart|reload|try-restart|enable|disable|mask|unmask|kill|reset-failed|revert|daemon-reload|daemon-reexec. Use when changing unit state. `unit` may be a string OR a list (batch); omit it for daemon-reload/daemon-reexec. dry_run=true returns the exact command without running. SAFETY: hard floor refuses severing dbus/logind/init even with force; self-preservation guard refuses severing units the agent depends on unless force=true. System mutations use sudo -n when not root. Every mutation is audit-logged. Returns command result / dry-run preview.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "unit": {"type": ["string", "array"], "items": {"type": "string"}},
+                "action": {"type": "string"},
+                "scope": _SCOPE,
+                "force": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "os_wait",
+        "title": "Wait for Unit State",
+        "annotations": {
+            **_RO,
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "description": "Block until `unit` reaches `state` (active|inactive|failed) or `timeout` seconds (default 30). Use after start/stop instead of guessing a sleep. Returns when the unit matches or on timeout.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "unit": {"type": "string"},
+                "state": {"type": "string", "enum": ["active", "inactive", "failed"]},
+                "timeout": {"type": "number"},
+                "scope": _SCOPE,
+            },
+            "required": ["unit"],
+        },
+    },
+    {
+        "name": "os_journal",
+        "title": "Query the Journal",
+        "annotations": _RO,
+        "description": "Read journald (journalctl). Use when diagnosing why a unit failed or what the kernel logged. Filters: unit, lines (50), since/until, priority (0-7), grep (server-side PCRE), kernel=true (-k dmesg), boot=true (current boot), boots=true (--list-boots), fields=true (-N field names), match=['_SYSTEMD_UNIT=x','_PID=…'], output (short/json/json-pretty/cat). scope=system|user. Returns matching journal lines.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "unit": {"type": "string"},
+                "lines": {"type": "number"},
+                "since": {"type": "string"},
+                "until": {"type": "string"},
+                "priority": {"type": ["string", "number"]},
+                "grep": {"type": "string"},
+                "kernel": {"type": "boolean"},
+                "boot": {"type": "boolean"},
+                "boots": {"type": "boolean"},
+                "fields": {"type": "boolean"},
+                "match": {"type": "array", "items": {"type": "string"}},
+                "output": {"type": "string"},
+                "scope": _SCOPE,
+            },
+        },
+    },
+    {
+        "name": "os_resources",
+        "title": "Resource Snapshot",
+        "annotations": _RO,
+        "description": "Snapshot host pressure: load avg, memory (`free -h`), disk (`df -h` real fs). Use when diagnosing load/OOM/disk-full. Pass `unit` for that unit's MemoryCurrent/MemoryPeak/CPUUsageNSec/TasksCurrent/ActiveState. Returns structured resource fields.",
+        "inputSchema": {"type": "object", "properties": {"unit": {"type": "string"}}},
+    },
+    {
+        "name": "os_processes",
+        "title": "Top Processes",
+        "annotations": _RO,
+        "description": "List top processes by `by`=cpu|mem (default cpu), `limit` (15), optional `pattern`. Use when finding what is burning CPU/RAM. Returns pid/ppid/user/%cpu/%mem/rss/stat/comm.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "by": {"type": "string", "enum": ["cpu", "mem"]},
+                "limit": {"type": "number"},
+                "pattern": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "os_pressure",
+        "title": "PSI Pressure",
+        "annotations": _RO,
+        "description": "Pressure Stall Information from /proc/pressure/{cpu,memory,io} — the real 'is the box starving' signal (some/full avg10/avg60/avg300). Use when load looks fine but the machine feels stuck. Returns PSI some/full averages. Read-only.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "os_net",
+        "title": "Network",
+        "annotations": _RO,
+        "description": "Network state (read-only). Use when checking listeners, addresses, routes, wifi, or NetworkManager. op=sockets (default; ss -tulpn listening + owning PID; summary=true→ss -s; listening=false→all; `pattern`) | addr (ip -br addr) | links (ip -br link) | routes (ip route) | wifi (nmcli/iw scan) | nm (NetworkManager device + active connections). Returns the op-selected network snapshot.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string",
+                    "enum": ["sockets", "addr", "links", "routes", "wifi", "nm"],
+                },
+                "summary": {"type": "boolean"},
+                "listening": {"type": "boolean"},
+                "pattern": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "os_sensors",
+        "title": "Thermal Sensors",
+        "annotations": _RO,
+        "description": "Read temperatures from /sys/class/thermal/thermal_zone*. Use when checking thermal throttling or fan issues. full=true also runs `sensors` (lm_sensors) if present. Returns zone names and temps.",
+        "inputSchema": {"type": "object", "properties": {"full": {"type": "boolean"}}},
+    },
+    {
+        "name": "os_containers",
+        "title": "Containers",
+        "annotations": _RO,
+        "description": "Inspect Docker/Podman (read-only). Use when observing containers without docker exec hacks. op=ps (default; all=true for stopped) | logs (`name`, lines, since) | inspect (`name`) | stats (live cpu/mem/net/io) | images | compose (docker compose ls). `engine`=docker|podman (auto-detected). Returns the op-selected container inventory/output.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string",
+                    "enum": ["ps", "logs", "inspect", "stats", "images", "compose"],
+                },
+                "name": {"type": "string"},
+                "all": {"type": "boolean"},
+                "lines": {"type": "number"},
+                "since": {"type": "string"},
+                "engine": {"type": "string", "enum": ["docker", "podman"]},
+            },
+        },
+    },
+    {
+        "name": "os_disk",
+        "title": "Storage",
+        "annotations": _RO,
+        "description": "Storage (read-only). Use when checking free space, large dirs, block devices, or mounts. op=usage (default; df -h real fs) | du (largest dirs under `path`, `depth`, `limit` — sorted) | blocks (lsblk: devices/partitions/fs/mounts) | mounts (findmnt real mounts). Returns the op-selected storage report.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string", "enum": ["usage", "du", "blocks", "mounts"]},
+                "path": {"type": "string"},
+                "depth": {"type": "number"},
+                "limit": {"type": "number"},
+            },
+        },
+    },
+    {
+        "name": "os_hardware",
+        "title": "Hardware / GPU",
+        "annotations": _RO,
+        "description": "Hardware inventory (read-only). Use when identifying CPU/GPU/PCI/USB for deploy or diagnostics. op=summary (default; kernel + cpu model + memory) | cpu (lscpu) | pci (lspci; verbose=true→-nnk drivers) | usb (lsusb) | gpu (nvidia-smi + PCI display + /sys/class/drm cards). Returns the op-selected hardware report.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string",
+                    "enum": ["summary", "cpu", "pci", "usb", "gpu"],
+                },
+                "verbose": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "os_power",
+        "title": "Power Control",
+        "annotations": {**_MUT, "idempotentHint": False},
+        "description": "Power state via logind/systemd: suspend|hibernate|hybrid-sleep|suspend-then-hibernate|reboot|poweroff|halt. Use only when the human explicitly wants a power transition. IRREVERSIBLE — refused unless confirm=true (refusal includes systemctl can-* capability probe). dry_run=true previews. sudo -n when not root. Audit-logged. Returns command result or refusal.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "confirm": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "os_session",
+        "title": "Login Sessions",
+        "annotations": _RO,
+        "description": "logind sessions/users/inhibitors (read-only). Use when checking who is logged in or what blocks sleep. op=list-sessions (default) | list-users | session-status (`id`) | inhibitors (active power/idle/sleep locks via systemd-inhibit --list). Returns the op-selected session report.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string",
+                    "enum": [
+                        "list-sessions",
+                        "list-users",
+                        "session-status",
+                        "inhibitors",
+                    ],
+                },
+                "id": {"type": ["string", "number"]},
+            },
+        },
+    },
+    {
+        "name": "os_time",
+        "title": "Time / Timezone / NTP",
+        "annotations": {**_MUT, "destructiveHint": False, "idempotentHint": True},
+        "description": "timedatectl. Use when reading or setting clock/timezone/NTP. op=status (default) | list-timezones | set-timezone (value=Area/City) | set-ntp (value=true|false). Writes need force=true (or dry_run=true) + root/polkit. Audit-logged. Returns status text or write result.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string"},
+                "value": {"type": ["string", "boolean"]},
+                "force": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "os_hostname",
+        "title": "Hostname",
+        "annotations": {**_MUT, "destructiveHint": False, "idempotentHint": True},
+        "description": "hostnamectl. Use when reading or setting the machine hostname. op=status (default) | set-hostname (value=NAME). Writes need force=true (or dry_run=true) + root/polkit. Audit-logged. Returns status text or write result.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string"},
+                "value": {"type": "string"},
+                "force": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "os_locale",
+        "title": "Locale / Keymap",
+        "annotations": {**_MUT, "destructiveHint": False, "idempotentHint": True},
+        "description": "localectl. Use when reading or setting locale/keymap. op=status (default) | list-locales | set-locale (value=LANG=…) | set-keymap (value=KEYMAP). Writes need force=true (or dry_run=true) + root/polkit. Audit-logged. Returns status text or write result.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string"},
+                "value": {"type": "string"},
+                "force": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "os_notify",
+        "title": "Desktop Notification",
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
+        "description": "Send a desktop notification to the logged-in user via the session bus (notify-send, else gdbus). Use when the human should see a non-blocking alert. Args: summary (title), body, urgency=low|normal|critical. Returns success/failure of delivery.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "summary": {"type": "string"},
+                "body": {"type": "string"},
+                "urgency": {"type": "string", "enum": ["low", "normal", "critical"]},
+            },
+            "required": ["summary"],
+        },
+    },
+    {
+        "name": "os_dbus",
+        "title": "D-Bus",
+        "annotations": {**_MUT, "idempotentHint": False},
+        "description": "D-Bus via busctl. Use for introspect/get-property reads or gated set-property/call writes. op=list | tree (`service`) | introspect (`service`,`path`) | get-property (`service`,`path`,`interface`,`member`) | set-property | call (+ optional `signature`+`args`). scope=system|user. `timeout` secs. set-property/call have side effects → force=true (or dry_run=true). Reads are free. Audit-logged on writes. Returns busctl output or dry-run preview.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string"},
+                "service": {"type": "string"},
+                "path": {"type": "string"},
+                "interface": {"type": "string"},
+                "member": {"type": "string"},
+                "signature": {"type": "string"},
+                "args": {"type": "array"},
+                "scope": _SCOPE,
+                "timeout": {"type": "number"},
+                "force": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "os_reload",
+        "title": "Reload Server",
+        "annotations": {**_MUT, "idempotentHint": False},
+        "description": "Hot-reload this MCP server's own code in place (execv). Use after editing the server so new tools take effect without /mcp reconnect. Returns after re-exec; connection is preserved when the host supports it.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 HANDLERS = {
-    "os_diag": h_diag, "os_services": h_services, "os_service": h_service, "os_wait": h_wait,
-    "os_journal": h_journal, "os_resources": h_resources, "os_processes": h_processes,
-    "os_pressure": h_pressure, "os_net": h_net, "os_sensors": h_sensors,
-    "os_containers": h_containers, "os_disk": h_disk, "os_hardware": h_hardware,
-    "os_power": h_power, "os_session": h_session, "os_time": h_time, "os_hostname": h_hostname,
-    "os_locale": h_locale, "os_notify": h_notify, "os_dbus": h_dbus, "os_reload": h_reload,
+    "os_diag": h_diag,
+    "os_services": h_services,
+    "os_service": h_service,
+    "os_wait": h_wait,
+    "os_journal": h_journal,
+    "os_resources": h_resources,
+    "os_processes": h_processes,
+    "os_pressure": h_pressure,
+    "os_net": h_net,
+    "os_sensors": h_sensors,
+    "os_containers": h_containers,
+    "os_disk": h_disk,
+    "os_hardware": h_hardware,
+    "os_power": h_power,
+    "os_session": h_session,
+    "os_time": h_time,
+    "os_hostname": h_hostname,
+    "os_locale": h_locale,
+    "os_notify": h_notify,
+    "os_dbus": h_dbus,
+    "os_reload": h_reload,
 }
 
 INSTRUCTIONS = (
@@ -905,7 +1591,17 @@ INSTRUCTIONS = (
     "Pairs with screen-mcp (GUI), NATS, and A2A for a full-stack agent."
 )
 
-MUTATING = {"os_service", "os_power", "os_dbus", "os_time", "os_hostname", "os_locale", "os_notify", "os_reload"}
+MUTATING = {
+    "os_service",
+    "os_power",
+    "os_dbus",
+    "os_time",
+    "os_hostname",
+    "os_locale",
+    "os_notify",
+    "os_reload",
+}
+
 
 # --------------------------------------------------------------------------- #
 # stdio JSON-RPC loop
@@ -918,6 +1614,7 @@ def reply(mid, result=None, error=None):
         m["result"] = result
     sys.stdout.write(json.dumps(m) + "\n")
     sys.stdout.flush()
+
 
 def main():
     # readline() loop (not `for line in sys.stdin`) so elicit() can read the
@@ -939,10 +1636,15 @@ def main():
             global ELICIT_OK
             client_caps = (msg.get("params") or {}).get("capabilities") or {}
             ELICIT_OK = "elicitation" in client_caps
-            reply(mid, {"protocolVersion": "2025-11-25",
-                        "capabilities": {"tools": {"listChanged": True}},
-                        "serverInfo": {"name": "os-control-mcp", "version": __version__},
-                        "instructions": INSTRUCTIONS})
+            reply(
+                mid,
+                {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {"tools": {"listChanged": True}},
+                    "serverInfo": {"name": "os-control-mcp", "version": __version__},
+                    "instructions": INSTRUCTIONS,
+                },
+            )
         elif method == "notifications/initialized":
             pass
         elif method == "tools/list":
@@ -952,16 +1654,24 @@ def main():
             args = msg.get("params", {}).get("arguments", {}) or {}
             handler = HANDLERS.get(name)
             if not handler:
-                reply(mid, result={"content": [{"type": "text", "text": f"unknown tool: {name}"}], "isError": True})
+                reply(
+                    mid,
+                    result={
+                        "content": [{"type": "text", "text": f"unknown tool: {name}"}],
+                        "isError": True,
+                    },
+                )
                 continue
             try:
                 reply(mid, handler(args))
             except Exception as e:
                 import traceback
+
                 log(traceback.format_exc())
                 reply(mid, err(f"{name} crashed: {e} (see {_state_dir()}/err.log)"))
         elif mid is not None:
             reply(mid, error={"code": -32601, "message": f"unknown method: {method}"})
+
 
 if __name__ == "__main__":
     main()
