@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
-# os-control-mcp launcher. Runs the stdio MCP server. The server is pure-stdlib
-# (no pip deps) — it shells out to systemctl/loginctl/journalctl/busctl — so a
-# plain python3 is enough. Prefers a project venv if one exists (for the dev test
-# deps); falls back to system python3. ${CLAUDE_PLUGIN_ROOT} is expanded by Claude
-# Code when installed as a plugin; the dirname fallback covers
-# `claude --plugin-dir ./os-control-mcp` dev runs.
+# os-control-mcp launcher. Pure-stdlib server — shells out to systemctl/etc.
+# Resolves Python via scripts/run-python.sh (env override → venv → PATH →
+# absolute Homebrew/system fallbacks). ${CLAUDE_PLUGIN_ROOT} is set by Claude
+# Code; dirname fallback covers `claude --plugin-dir` dev runs.
 set -euo pipefail
 ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+RUNNER="${ROOT}/scripts/run-python.sh"
 
-PY=""
-for cand in "$ROOT/.venv/bin/python" "$ROOT/venv/bin/python"; do
-  if [ -x "$cand" ]; then PY="$cand"; break; fi
-done
-PY="${PY:-$(command -v python3 || true)}"
-
-if [ -z "$PY" ]; then
-  echo "os-control-mcp: no python3 found. Install Python 3.9+." >&2
+if [ ! -f "$RUNNER" ]; then
+  echo "os-control-mcp: run-python.sh missing at $RUNNER" >&2
   exit 1
 fi
 
-exec "$PY" "$ROOT/server.py"
+exec bash "$RUNNER" "$ROOT/server.py"

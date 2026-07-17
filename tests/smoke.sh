@@ -28,3 +28,11 @@ assert len(tools) >= 8, f"too few tools: {tools}"
 assert by[3]["result"]["content"][0]["text"].startswith("os-control-mcp"), "os_diag broken"
 print(f"smoke OK - {len(tools)} tools: {chr(44).join(tools)}")
 '
+
+echo "== run-python launcher =="
+test -f scripts/run-python.sh
+bash -n scripts/run-python.sh
+bash -n bin/os-control-mcp
+grep -q 'run-python.sh' bin/os-control-mcp
+bash scripts/run-python.sh -c 'import sys; assert sys.version_info >= (3, 10)'
+echo "  ok: run-python"
