@@ -186,8 +186,25 @@ SEVERING_ACTIONS = {"stop", "kill", "restart", "try-restart", "disable", "mask"}
 
 
 def is_protected(unit):
-    u = (unit or "").lower()
-    return any(t.lower() in u for t in PROTECTED_TOKENS)
+    """True if unit stem matches a protected token exactly (not a substring).
+
+    Tokens match the unit name stem (before .service/.socket/…) or a template
+    family (token ends with '@', or stem is 'token@instance'). Avoids overmatch
+    e.g. token 'ssh' vs 'libssh2.service', 'goose' vs 'my-goose-app.service'.
+    """
+    u = (unit or "").lower().strip()
+    if not u:
+        return False
+    u = u.rsplit("/", 1)[-1]
+    stem = u.rsplit(".", 1)[0] if "." in u else u
+    for t in PROTECTED_TOKENS:
+        tok = t.lower()
+        if tok.endswith("@"):
+            if stem == tok[:-1] or stem.startswith(tok):
+                return True
+        elif stem == tok or stem.startswith(tok + "@"):
+            return True
+    return False
 
 
 def is_floor(unit):

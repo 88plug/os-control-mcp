@@ -21,13 +21,30 @@ def test_self_preservation_guard_matches_dependencies():
         "dbus.service",
         "systemd-logind.service",
         "sshd.service",
+        "ssh.service",
         "NetworkManager.service",
         "tailscaled.service",
         "user@1000.service",
+        "user-runtime-dir@1000.service",
+        "getty@tty1.service",
+        "serial-getty@ttyS0.service",
         "goosed.service",
+        "goose.service",
+        "wg-quick@wg0.service",
     ):
         assert server.is_protected(unit), unit
-    for unit in ("nginx.service", "postgresql.service", "my-app.service"):
+    for unit in (
+        "nginx.service",
+        "postgresql.service",
+        "my-app.service",
+        # substring overmatch must NOT fire
+        "libssh2.service",
+        "openssh-server.service",
+        "my-goose-app.service",
+        "polkit-kde-authentication-agent-1.service",
+        "not-sshd.service",
+        "dbus-wait.service",
+    ):
         assert not server.is_protected(unit), unit
 
 
