@@ -176,5 +176,5 @@ coordinate the fleet.
 
 ## License
 
-[FSL-1.1-ALv2](https://github.com/88plug/os-control-mcp/blob/main/LICENSE.md) —
+[FSL-1.1-ALv2](https://github.com/88plug/os-control-mcp/blob/main/LICENSE) —
 © 2026 88plug.
