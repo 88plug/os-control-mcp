@@ -28,8 +28,8 @@ library, zero pip runtime deps.** Linux + systemd.
 Install the plugin in Claude Code:
 
 ```text
-/plugin marketplace add 88plug/os-control-mcp
-/plugin install os-control-mcp@os-control-mcp
+/plugin marketplace add 88plug/claude-code-plugins
+/plugin install os-control-mcp@88plug
 ```
 
 Then confirm the server loaded and its tools are available:

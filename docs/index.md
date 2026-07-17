@@ -31,8 +31,8 @@ counterpart to [screen-mcp](https://github.com/88plug/screen-mcp)'s GUI control.
 ### Claude Code plugin
 
 ```text
-/plugin marketplace add 88plug/os-control-mcp
-/plugin install os-control-mcp@os-control-mcp
+/plugin marketplace add 88plug/claude-code-plugins
+/plugin install os-control-mcp@88plug
 /mcp
 ```
 
