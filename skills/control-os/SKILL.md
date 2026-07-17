@@ -6,13 +6,18 @@ description: >-
 
 # Controlling the OS with os-control-mcp
 
-The sanctioned "motor cortex" for the host: act through systemd / logind / journald / D-Bus, not raw PID hacks. Tools: `os_diag`, `os_services`, `os_service`, `os_journal`, `os_resources`, `os_processes`, `os_power`, `os_notify`, `os_dbus`, `os_reload`.
+The sanctioned "motor cortex" for the host: act through systemd / logind / journald / D-Bus, not raw PID hacks.
+
+**Full tool inventory (21):**
+- **Sense:** `os_diag`, `os_services`, `os_journal`, `os_resources`, `os_processes`, `os_pressure`, `os_net`, `os_disk`, `os_hardware`, `os_containers`, `os_sensors`, `os_session`
+- **Act:** `os_service`, `os_power`, `os_dbus`, `os_time`, `os_hostname`, `os_locale`, `os_notify`
+- **Confirm / meta:** `os_wait`, `os_reload`
 
 ## The loop: sense → act → confirm
 
-1. **Sense first.** `os_diag` (health, privilege, what's available) → `os_services` (list/status), `os_journal` (logs), `os_resources` / `os_processes` (pressure). Understand the state before changing it.
-2. **Act through the sanctioned tool.** `os_service` (start/stop/restart/enable/…), `os_power` (suspend/reboot/poweroff), `os_dbus` (call a method), `os_notify` (tell the human).
-3. **Confirm.** Re-run `os_services unit=…` / `os_journal unit=…` to verify the new state — don't assume the action took.
+1. **Sense first.** `os_diag` (health, privilege, backends) → observe with `os_services` / `os_journal` / `os_resources` / `os_processes` / `os_pressure` / `os_net` / `os_disk` / `os_hardware` / `os_containers` / `os_sensors` / `os_session`. Understand state before changing it.
+2. **Act through the sanctioned tool.** `os_service` (start/stop/restart/enable/…), `os_power` (suspend/reboot/poweroff), `os_dbus` / `os_time` / `os_hostname` / `os_locale` / `os_notify`.
+3. **Confirm.** `os_wait` and/or re-run `os_services unit=…` / `os_journal unit=…` — don't assume the action took.
 
 ## The two guards (and how to pass them)
 

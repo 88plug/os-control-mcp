@@ -22,7 +22,7 @@ counterpart to [screen-mcp](https://github.com/88plug/screen-mcp)'s GUI control.
 | Need | Notes |
 |---|---|
 | Linux + systemd | Arch, Debian/Ubuntu, Fedora, … |
-| Python 3.9+ | Pure stdlib runtime — no pip packages required to run |
+| Python 3.10+ | Fleet T1 floor via `run-python.sh`; pure stdlib runtime — no pip packages required to run |
 | D-Bus | System + session bus for `os_dbus` / notifications |
 | Optional | `libnotify` (`notify-send`), `sudo` for non-root system mutations, Docker/Podman for `os_containers` |
 

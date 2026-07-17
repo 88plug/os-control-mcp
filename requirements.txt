@@ -2,7 +2,7 @@
 #
 # RUNTIME: none. The server is pure standard library — it shells out to the host's
 # own sanctioned tooling (systemctl, loginctl, journalctl, busctl, notify-send /
-# gdbus). A plain python3 (>=3.9) runs it. `os_diag` reports which of those
+# gdbus). A plain python3 (>=3.10; fleet T1) runs it. `os_diag` reports which of those
 # backend binaries are present + usable.
 #
 # DEV: the test runner only.

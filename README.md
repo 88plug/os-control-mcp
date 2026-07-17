@@ -49,7 +49,7 @@ present.
 ## Requirements
 
 - **Linux + systemd** only (Arch, Debian/Ubuntu, Fedora, …)
-- Python 3.9+ (pure stdlib runtime — no pip packages required to run)
+- Python 3.10+ (fleet T1 `run-python.sh` floor; pure stdlib runtime — no pip packages required to run)
 - D-Bus (system + session) for `os_dbus` / notifications
 - Optional: `libnotify` (`notify-send`), `sudo` for non-root system mutations,
   Docker/Podman for `os_containers`
