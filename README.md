@@ -42,9 +42,17 @@ No setup needed — it uses the host's existing systemd/D-Bus tooling. Run the
 `os_diag` tool first; it reports your privilege level and which backends are
 present.
 
-> ⚠️ **Treat this plugin as privileged.** It can stop services and power off the
+> **Treat this plugin as privileged.** It can stop services and power off the
 > machine. The guards below make that hard to do by accident, but install it
 > deliberately and disable it via `/plugin` when you're not using it.
+
+## Requirements
+
+- **Linux + systemd** only (Arch, Debian/Ubuntu, Fedora, …)
+- Python 3.9+ (pure stdlib runtime — no pip packages required to run)
+- D-Bus (system + session) for `os_dbus` / notifications
+- Optional: `libnotify` (`notify-send`), `sudo` for non-root system mutations,
+  Docker/Podman for `os_containers`
 
 ## Use from any MCP client
 
@@ -61,6 +69,20 @@ the launcher (or `python3 server.py` directly):
 ```
 
 It speaks MCP `2025-11-25` over stdio; the tools appear like any other MCP server.
+
+## The loop: `os_diag` → observe → act → confirm
+
+```text
+os_diag  →  observe (read-only)  →  act (HIL-gated)  →  os_wait / re-read
+```
+
+1. **`os_diag`** — health, privilege, backends, HIL/gating status
+2. **Observe** — `os_services` / `os_journal` / `os_resources` / `os_processes` /
+   `os_pressure` / `os_net` / `os_disk` / `os_hardware` / `os_containers` /
+   `os_sensors` / `os_session`
+3. **Act** — `os_service` / `os_power` / `os_dbus` / `os_time` / `os_hostname` /
+   `os_locale` / `os_notify`
+4. **Confirm** — `os_wait` and/or re-read status/journal
 
 ## Tools
 
@@ -85,7 +107,7 @@ It speaks MCP `2025-11-25` over stdio; the tools appear like any other MCP serve
 
 | Tool | What | Safety |
 |---|---|---|
-| `os_service` | start/stop/restart/reload/enable/disable/mask/kill/**reset-failed**/**daemon-reload** (single or **batch**) | **hard floor + self-preservation guard**; `dry_run` |
+| `os_service` | start/stop/restart/reload/enable/disable/mask/kill/**reset-failed**/**daemon-reload** (single or **batch**) | **hard floor + self-preservation guard**; `force`; `dry_run` |
 | `os_wait` | block until a unit is active/inactive/failed (or timeout) | — |
 | `os_power` | suspend/hibernate/reboot/poweroff/halt | **needs `confirm=true`**; `dry_run` |
 | `os_time` / `os_hostname` / `os_locale` | machine settings (timezone/NTP, hostname, locale/keymap) | writes need `force=true`; `dry_run` |
@@ -100,9 +122,9 @@ a service (stop/kill/restart/disable/mask), power (reboot/poweroff/…), and D-B
 machine-setting *writes* — is gated for a **human's** approval, in this order:
 
 1. **Hard floor (never bypassable).** Severing the agent's absolute substrate —
-   `dbus`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target`,
-   `sysinit.target` — is refused **even with `force`**. No flag lets a model
-   power-cycle the bus it's speaking on.
+   `dbus`, `dbus-broker`, `systemd-logind`, `init.scope`, `-.slice`,
+   `basic.target`, `sysinit.target` — is refused **even with `force`**. No flag
+   lets a model power-cycle the bus it's speaking on.
 2. **Human approval via MCP elicitation.** When your MCP client supports
    elicitation, the server **asks the human** (`elicitation/create`) before any
    destructive action and runs it only if the human accepts. The model's
@@ -117,6 +139,12 @@ machine-setting *writes* — is gated for a **human's** approval, in this order:
    elicitation channel, no mutation.
 4. **Preview.** Any mutating tool accepts **`dry_run=true`** to return the exact
    command without running it.
+
+| Flag | Tools | Effect |
+|---|---|---|
+| `dry_run=true` | All mutating tools | Preview the exact command; execute nothing |
+| `force=true` | `os_service` (severing protected units), `os_dbus` writes, machine settings | Headless override when elicitation is unavailable; **never** overrides the hard floor |
+| `confirm=true` | `os_power` | Required for power transitions (same HIL rules) |
 
 Every mutation is appended to an **audit log** (with the approval path — human vs
 flag) at `$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.

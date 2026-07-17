@@ -4,108 +4,177 @@ The sanctioned OS **motor cortex** for an agent on a Linux box. Control the host
 through its *structured* interfaces — **systemd**, **logind**, **journald**, and
 the **D-Bus** buses — instead of raw `kill`/PID hacks. The system-service
 counterpart to [screen-mcp](https://github.com/88plug/screen-mcp)'s GUI control.
-Pure standard library, zero pip runtime deps. Linux + systemd.
+
+**Pure standard library. Zero pip runtime deps. Linux + systemd.**
+
+!!! warning "Privileged by design"
+    This server can stop services and power off the box. Install it deliberately.
+    Disable it via `/plugin` when not in use. Destructive actions are human-gated
+    (see [Safety model](#safety-model-human-in-the-loop)).
+
+## Requirements
+
+!!! important "Linux + systemd only"
+    os-control-mcp shells out to `systemctl`, `loginctl`, `journalctl`, and
+    `busctl`. It targets a systemd Linux host. It will not run on macOS, Windows,
+    or non-systemd Linux.
+
+| Need | Notes |
+|---|---|
+| Linux + systemd | Arch, Debian/Ubuntu, Fedora, … |
+| Python 3.9+ | Pure stdlib runtime — no pip packages required to run |
+| D-Bus | System + session bus for `os_dbus` / notifications |
+| Optional | `libnotify` (`notify-send`), `sudo` for non-root system mutations, Docker/Podman for `os_containers` |
 
 ## Install
+
+### Claude Code plugin
 
 ```text
 /plugin marketplace add 88plug/os-control-mcp
 /plugin install os-control-mcp@os-control-mcp
-/mcp          # confirm the "os" server loaded and tools are listed
+/mcp
 ```
 
-⚠️ **Treat as privileged** — it can stop services and power off the box. Install
-it deliberately and disable it via `/plugin` when not in use. No setup: it uses
-the host's existing systemd/D-Bus tooling.
+Confirm the `os` server loaded and its tools are listed. No extra setup — it
+uses the host's existing systemd/D-Bus tooling. Call **`os_diag` first**; it
+reports privilege, backends, and safety status.
 
-## The loop
+### Any MCP client
 
-**sense → act → confirm.** `os_diag` (health/privilege) →
-`os_services`/`os_journal`/`os_resources`/`os_processes`/`os_pressure`/`os_net`/`os_sensors`/`os_session`
-(observe) →
-`os_service`/`os_power`/`os_dbus`/`os_time`/`os_hostname`/`os_locale`/`os_notify`
-(act) → `os_wait` or re-read to confirm.
+Plain stdio MCP (`2025-11-25`). Point any host at the launcher or `server.py`:
+
+```json
+{
+  "mcpServers": {
+    "os": {
+      "command": "python3",
+      "args": ["/path/to/os-control-mcp/server.py"]
+    }
+  }
+}
+```
+
+## The loop: `os_diag` → observe → act → confirm
+
+Drive the host in this order — never mutate blind:
+
+1. **`os_diag`** — health, euid/privilege, backend binaries, manager state, bus
+   reachability, HIL/gating status.
+2. **Observe** — read-only tools: `os_services`, `os_journal`, `os_resources`,
+   `os_processes`, `os_pressure`, `os_net`, `os_disk`, `os_hardware`,
+   `os_containers`, `os_sensors`, `os_session`.
+3. **Act** — guarded tools: `os_service`, `os_power`, `os_dbus`, `os_time`,
+   `os_hostname`, `os_locale`, `os_notify`.
+4. **Confirm** — `os_wait` and/or re-read status/journal. Do not assume the
+   action took.
+
+```text
+os_diag  →  observe (read-only)  →  act (HIL-gated)  →  os_wait / re-read
+```
 
 ## Tools
 
 ### Observe (read-only)
-- **`os_diag`** — euid, backend binaries, system/user manager state, bus
-  reachability, safety status. Run it first.
-- **`os_services`** — `op`=`list` (filter `type`/`state`/`pattern`) · `status` ·
-  `show` (key=value props) · `cat` (merged unit + drop-ins) · `deps`
-  (`list-dependencies`, `reverse` for reverse) · `files` (`list-unit-files`).
-  `scope`=system|user.
-- **`os_journal`** — journald: `unit`, `lines`, `since`/`until`, `priority`,
-  `grep` (server-side PCRE), `kernel` (`-k` dmesg), `boot`, `boots`
-  (`--list-boots`), `fields` (`-N`), `match`=`['_SYSTEMD_UNIT=x', …]`,
-  `output`=short/json/json-pretty/cat. `scope`=system|user.
-- **`os_resources`** — load, `free -h`, `df -h`, optional per-`unit` accounting.
-- **`os_processes`** — top by `by`=cpu|mem, `limit`, `pattern`.
-- **`os_pressure`** — PSI from `/proc/pressure/{cpu,memory,io}` (some/full avg10/60/300).
-- **`os_net`** — `op`=`sockets` (`ss`; `summary`/`listening`/`pattern`) · `addr` · `links` · `routes` (`ip`) · `wifi` (nmcli/iw) · `nm` (NetworkManager devices + active connections).
-- **`os_disk`** — `op`=`usage` (`df`) · `du` (largest dirs under `path`, `depth`, sorted) · `blocks` (`lsblk`) · `mounts` (`findmnt`).
-- **`os_containers`** — Docker/Podman: `op`=`ps` (`all`) · `logs` (`name`,`lines`,`since`) · `inspect` · `stats` · `images` · `compose`. `engine` auto-detected.
-- **`os_hardware`** — `op`=`summary` · `cpu` (lscpu) · `pci` (lspci; `verbose`) · `usb` (lsusb) · `gpu` (nvidia-smi + PCI display + `/sys/class/drm`).
-- **`os_sensors`** — `/sys/class/thermal` temps; `full=true` also runs `sensors`.
-- **`os_session`** — logind `list-sessions`/`list-users`/`session-status`/`inhibitors`.
 
-> The observe set is data-driven: the container, disk, network-config, and GPU
-> tools were added by mining real Claude Code + opencode session logs for the
-> OS-observation commands the AI actually reached for (Docker was the #1 by far).
+| Tool | What |
+|---|---|
+| `os_diag` | Health first: privilege, backends, manager state, bus, safety status |
+| `os_services` | Inspect units — `list` / `status` / `show` / `cat` / `deps` / `files` (`scope`=system\|user) |
+| `os_journal` | journald — unit / since / until / priority / `grep` / dmesg / boots / `match` |
+| `os_resources` | Load + memory + disk (+ optional per-unit accounting) |
+| `os_processes` | Top processes by `cpu` or `mem` |
+| `os_pressure` | PSI from `/proc/pressure` — the real "is the box starving" signal |
+| `os_net` | Sockets (`ss`), `ip` addr/links/routes, wifi, NetworkManager |
+| `os_disk` | `df`, `du` (largest dirs), `lsblk`, mounts |
+| `os_containers` | Docker/Podman — ps / logs / inspect / stats / images / compose |
+| `os_hardware` | CPU / PCI / USB / **GPU** (nvidia-smi + DRM) inventory |
+| `os_sensors` | Thermal zones (+ `lm_sensors` if present) |
+| `os_session` | logind sessions / users / inhibitors |
 
 ### Act (guarded)
-- **`os_service`** — `start|stop|restart|reload|try-restart|enable|disable|mask|`
-  `unmask|kill|reset-failed|revert|daemon-reload|daemon-reexec`. `unit` may be a
-  **list** (batch); omit for daemon-reload/reexec. Severing a protected unit needs
-  `force=true`; the hard floor is never bypassable (see below). `dry_run=true` previews.
-- **`os_wait`** — block until `unit` reaches `state` (active|inactive|failed) or `timeout`.
-- **`os_power`** — `suspend|hibernate|hybrid-sleep|suspend-then-hibernate|reboot|poweroff|halt`.
-  Refused unless `confirm=true` (the refusal includes the `systemctl can-*` probe). `dry_run`.
-- **`os_time`** — `status`/`list-timezones`/`set-timezone`/`set-ntp`. Writes need `force=true`.
-- **`os_hostname`** — `status`/`set-hostname`. Writes need `force=true`.
-- **`os_locale`** — `status`/`list-locales`/`set-locale`/`set-keymap`. Writes need `force=true`.
-- **`os_dbus`** — `list|tree|introspect|get-property|set-property|call`, `scope`,
-  `timeout`. `set-property`/`call` need `force=true`; reads are free. `dry_run`.
-- **`os_notify`** — desktop notification to the logged-in user.
-- **`os_reload`** — hot-reload the server in place.
+
+| Tool | What | Safety |
+|---|---|---|
+| `os_service` | start / stop / restart / reload / enable / disable / mask / kill / reset-failed / daemon-reload (single or **batch**) | hard floor + self-preservation; `force`; `dry_run` |
+| `os_wait` | Block until a unit is active / inactive / failed (or timeout) | — |
+| `os_power` | suspend / hibernate / reboot / poweroff / halt | needs **`confirm=true`**; `dry_run` |
+| `os_time` | timezone / NTP (`timedatectl`) | writes need **`force=true`**; `dry_run` |
+| `os_hostname` | hostname (`hostnamectl`) | writes need **`force=true`**; `dry_run` |
+| `os_locale` | locale / keymap (`localectl`) | writes need **`force=true`**; `dry_run` |
+| `os_dbus` | list / tree / introspect / get-property / set-property / `call` | writes need **`force=true`**; `dry_run` |
+| `os_notify` | Desktop notification to the logged-in user | — |
+| `os_reload` | Hot-reload the server in place | — |
 
 ## Safety model — human-in-the-loop
 
-Destructive actions (severing a service, power, D-Bus/machine *writes*) are gated
-for a **human's** approval, not the model's:
+!!! danger "Human-in-the-loop, not model-in-the-loop"
+    Destructive actions (severing a service, power transitions, D-Bus / machine
+    *writes*) require a **human's** approval. The model does not self-authorize
+    when elicitation is available.
 
 | Layer | Applies to | Resolution |
 |---|---|---|
-| **Hard floor** | severing the absolute substrate — `dbus`, `dbus-broker`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target`, `sysinit.target` | **refused always** (even with `force`) |
-| **Human approval (elicitation)** | every destructive action, when the client supports MCP elicitation | server sends `elicitation/create`; runs only if the **human accepts**. Model `force`/`confirm` is **ignored** — human is the authority |
-| **Flag fallback** | same actions, when the client can't elicit | `force`/`confirm` flags; severing a unit the agent stands on (`sshd`, `NetworkManager`, `tailscaled`, session, `goosed`) still needs `force`. `OSCTL_REQUIRE_HUMAN=1` disables this fallback entirely |
-| **Preview** | any mutating tool | `dry_run=true` returns the exact command, runs nothing |
+| **Hard floor** | Severing absolute substrate: `dbus`, `dbus-broker`, `systemd-logind`, `init.scope`, `-.slice`, `basic.target`, `sysinit.target` | **Refused always** — even with `force` |
+| **Human approval (elicitation)** | Every destructive action, when the client supports MCP elicitation | Server sends `elicitation/create`; runs only if the **human accepts**. Model `force` / `confirm` is **ignored** |
+| **Flag fallback** | Same actions, when the client cannot elicit | `force` / `confirm` flags. Severing a unit the agent stands on (`sshd`, `NetworkManager`, `tailscaled`, session, `goosed`, …) still needs `force`. **`OSCTL_REQUIRE_HUMAN=1`** disables this fallback entirely |
+| **Preview** | Any mutating tool | **`dry_run=true`** returns the exact command and runs nothing |
 
-When elicitation is available the human is the sole authority — a declined prompt
-never executes (the analog of screen-mcp's user-takeover guard: *don't saw off the
-branch you're sitting on*). Every mutation is appended — with its approval path
-(human vs flag) — to `$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
+### Flags: `dry_run` / `force` / `confirm`
 
-## Principles — The Agent Oath
+| Flag | Tools | Effect |
+|---|---|---|
+| `dry_run=true` | All mutating tools | Preview the exact command; execute nothing |
+| `force=true` | `os_service` (severing protected units), `os_dbus` writes, `os_time` / `os_hostname` / `os_locale` writes | Headless override when elicitation is unavailable; **never** overrides the hard floor |
+| `confirm=true` | `os_power` | Required for power transitions (same HIL rules) |
 
-os-control-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.com):
-the gating is the Oath made executable — §1 human welfare over task completion
-(hard floor + HIL), §2 human agency (HIL elicitation), §3 protect systems
-(sanctioned interfaces only), §5 transparency (audit + `dry_run`), §7 don't bypass
-safety (unbypassable floor + `OSCTL_REQUIRE_HUMAN`), §11 respect human oversight
-(HIL authority + operator bounds). The Oath is the rationale; the **operator's
-gating is the authority** — this server does not adopt any "supersedes instructions"
-clause. `os_diag` reports the enforced principles.
+!!! warning "Severing actions"
+    `stop` / `kill` / `restart` / `try-restart` / `disable` / `mask` on a unit
+    the agent depends on are refused unless human-approved (or `force` on the
+    flag path). The hard floor is never bypassable.
+
+Every mutation is appended — with its approval path (`human` vs `flag`) — to
+`$XDG_STATE_HOME/os-control-mcp/audit.jsonl`.
 
 ## Privilege
 
-Read-only tools work unprivileged. System-scope mutations (`os_service` on system
-units, `os_power`) need root or polkit — when not root the server tries `sudo -n`
-and otherwise says so. Options: run as root, passwordless sudo for `systemctl`, a
-polkit rule, or use `scope="user"` for the user's own units.
+Read-only tools work unprivileged. **System-scope mutations** (`os_service` on
+system units, `os_power`, machine settings) need root or polkit. When not root
+the server tries `sudo -n` and otherwise says so.
+
+| Option | When |
+|---|---|
+| Run as root | Full system control |
+| Passwordless sudo for `systemctl` | Non-root agent + headless system mutations |
+| Polkit rule | Desktop / interactive elevation |
+| `scope="user"` | User units only — no root required |
+
+## Principles — The Agent Oath
+
+os-control-mcp is a reference **enforcer** of
+[The Agent Oath](https://theagentoath.com): the gating is the Oath made
+executable.
+
+| Oath principle | Enforced by |
+|---|---|
+| §1 Human welfare over task completion | Hard floor + HIL |
+| §2 Human agency | HIL elicitation |
+| §3 Protect systems | Sanctioned interfaces only |
+| §5 Transparency | Audit log + `dry_run` |
+| §7 Don't bypass safety | Unbypassable floor + `OSCTL_REQUIRE_HUMAN` |
+| §11 Respect human oversight | HIL authority + operator bounds |
+
+The Oath is the rationale; the **operator's gating is the authority**. This
+server does not adopt any "supersedes instructions" clause. `os_diag` reports
+the enforced principles.
 
 ## Pairs with
 
 [screen-mcp](https://github.com/88plug/screen-mcp) (GUI), NATS (messaging), A2A
 (inter-agent) — sense the kernel/services, act on the system, drive the desktop,
 coordinate the fleet.
+
+## License
+
+[FSL-1.1-ALv2](https://github.com/88plug/os-control-mcp/blob/main/LICENSE.md) —
+© 2026 88plug.
