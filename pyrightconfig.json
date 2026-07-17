@@ -1,0 +1,16 @@
+{
+  "include": ["server.py", "tests", ".ci", "scripts"],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "venv",
+    "site",
+    ".ruff_cache",
+    "**/*.sh"
+  ],
+  "extraPaths": ["."],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false
+}

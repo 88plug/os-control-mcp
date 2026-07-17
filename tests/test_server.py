@@ -140,6 +140,7 @@ def test_hil_elicitation_is_authority():
         assert server.require_human("stop x", "force", {}) is None  # human approves
         server.elicit = lambda msg: "decline"
         r = server.require_human("stop x", "force", {"force": True})  # flag IGNORED
+        assert r is not None
         assert r.get("isError") and "DENIED by human" in r["content"][0]["text"]
     finally:
         server.elicit = orig
@@ -149,9 +150,8 @@ def test_hil_flag_fallback_without_elicitation():
     orig = server.elicit
     try:
         server.elicit = lambda msg: None  # no capability
-        assert server.require_human("stop x", "force", {}).get(
-            "isError"
-        )  # high-risk needs flag
+        r = server.require_human("stop x", "force", {})
+        assert r is not None and r.get("isError")  # high-risk needs flag
         assert server.require_human("stop x", "force", {"force": True}) is None
         assert (
             server.require_human("stop x", "force", {}, headless_allow=True) is None
@@ -168,6 +168,7 @@ def test_hil_require_human_mode_blocks_flag_fallback():
         r = server.require_human(
             "poweroff", "confirm", {"confirm": True}
         )  # flag ignored
+        assert r is not None
         assert r.get("isError") and "OSCTL_REQUIRE_HUMAN" in r["content"][0]["text"]
     finally:
         server.elicit, server.REQUIRE_HUMAN = orig_e, orig_r
@@ -175,6 +176,7 @@ def test_hil_require_human_mode_blocks_flag_fallback():
 
 def test_hil_hard_floor_beats_everything():
     r = server.require_human("stop dbus", "force", {"force": True}, floor=True)
+    assert r is not None
     assert r.get("isError") and "hard floor" in r["content"][0]["text"].lower()
 
 

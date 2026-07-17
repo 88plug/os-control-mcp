@@ -262,7 +262,9 @@ def approval_path():
     return "human" if ELICIT_OK else ("require-human" if REQUIRE_HUMAN else "flag")
 
 
-def require_human(desc, flag_name, args, *, floor=False, headless_allow=False):
+def require_human(
+    desc, flag_name, args, *, floor=False, headless_allow=False
+) -> dict | None:
     """The HIL gate. Returns None to proceed, or an err(...) to block.
     * hard floor      -> always blocked (no override).
     * elicitation on  -> the HUMAN decides; the model's flag is IGNORED (authority).
