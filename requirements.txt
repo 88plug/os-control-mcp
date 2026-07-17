@@ -6,7 +6,7 @@
 # backend binaries are present + usable.
 #
 # DEV: the test runner only.
-pytest>=8.0
+pytest>=9.1.1
 
 # ---------------------------------------------------------------------------
 # SYSTEM DEPENDENCIES (provided by the OS; not pip-installable)
