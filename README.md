@@ -2,7 +2,7 @@
 
 # os-control-mcp
 
-**Linux systemd MCP server** for AI agents — control services, journald, D-Bus, and power through structured interfaces, never raw PID hacks.
+**Linux systemd MCP** for Claude Code and Grok — control services, journald, D-Bus, and power through structured OS interfaces, never raw PID hacks.
 
 [![plugin-validate](https://github.com/88plug/os-control-mcp/actions/workflows/plugin-validate.yml/badge.svg)](https://github.com/88plug/os-control-mcp/actions/workflows/plugin-validate.yml)
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat)](LICENSE)
@@ -12,11 +12,13 @@
 
 </div>
 
-os-control-mcp is a pure-stdlib **MCP server** and **Claude Code plugin** that gives any model-context-protocol client sanctioned control of a **Linux** host. Manage **systemd** services and timers, query **journald**, read host resources and processes, send desktop notifications, drive **D-Bus**, and manage power — all via `systemctl`, `loginctl`, `journalctl`, and `busctl`, never raw `kill`/PID hacks.
+os-control-mcp is a pure-stdlib **MCP server** and Claude Code / Grok plugin that gives any model-context-protocol client sanctioned control of a **Linux** host. Manage **systemd** services and timers, query **journald**, read host resources and processes, send desktop notifications, drive **D-Bus**, and manage power — all via `systemctl`, `loginctl`, `journalctl`, and `busctl`, never raw `kill`/PID hacks.
 
 It is the system-service counterpart to [screen-mcp](https://github.com/88plug/screen-mcp)'s GUI control. Zero pip runtime deps. Ships the MCP server plus a **control-os** skill. Linux + systemd only.
 
-## Quickstart
+## Install
+
+### Claude Code
 
 ```text
 /plugin marketplace add 88plug/claude-code-plugins

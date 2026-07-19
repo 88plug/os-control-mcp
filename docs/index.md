@@ -1,5 +1,7 @@
 # os-control-mcp
 
+**Linux systemd MCP** for Claude Code and Grok — control services, journald, D-Bus, and power through structured OS interfaces, never raw PID hacks.
+
 [![Docs](https://img.shields.io/badge/docs-online-blue?style=flat)](https://88plug.github.io/os-control-mcp/)
 
 The sanctioned OS **motor cortex** for an agent on a Linux box. Control the host
@@ -30,7 +32,7 @@ counterpart to [screen-mcp](https://github.com/88plug/screen-mcp)'s GUI control.
 
 ## Install
 
-### Claude Code plugin
+### Claude Code
 
 ```text
 /plugin marketplace add 88plug/claude-code-plugins
