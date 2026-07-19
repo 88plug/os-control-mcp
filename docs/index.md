@@ -1,5 +1,7 @@
 # os-control-mcp
 
+[![Docs](https://img.shields.io/badge/docs-online-blue?style=flat)](https://88plug.github.io/os-control-mcp/)
+
 The sanctioned OS **motor cortex** for an agent on a Linux box. Control the host
 through its *structured* interfaces — **systemd**, **logind**, **journald**, and
 the **D-Bus** buses — instead of raw `kill`/PID hacks. The system-service
@@ -186,3 +188,14 @@ coordinate the fleet.
 
 [FSL-1.1-ALv2](https://github.com/88plug/os-control-mcp/blob/main/LICENSE) —
 © 2026 88plug.
+
+## Features
+
+| Area | What you get |
+|---|---|
+| **Systemd** | List/status/deps units; start/stop/restart/enable/mask/kill; batch ops; `os_wait` |
+| **Journald** | Unit/since/until/priority filters, server-side `grep`, dmesg, boots |
+| **Host telemetry** | Load, memory, disk, PSI pressure, processes, net, hardware, sensors, containers |
+| **D-Bus + settings** | Introspect/call system or session bus; timezone, hostname, locale |
+| **Power + notify** | Suspend/hibernate/reboot/poweroff; desktop notifications to the logged-in user |
+| **Safety** | Hard floor, human-in-the-loop elicitation, self-preservation guard, `dry_run`, audit log |

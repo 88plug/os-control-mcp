@@ -1,5 +1,5 @@
 site_name: os-control-mcp
-site_description: "The sanctioned OS motor cortex for an agent on a Linux box: control systemd, logind, journald, and D-Bus through structured interfaces."
+site_description: 'Linux systemd MCP server for AI agents — control services, journald, D-Bus, and power through structured interfaces, never raw PID hacks.'
 site_url: https://88plug.github.io/os-control-mcp/
 repo_url: https://github.com/88plug/os-control-mcp
 repo_name: 88plug/os-control-mcp
