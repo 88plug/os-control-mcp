@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.7.19
+
+- **Smoke wire path:** drive stdio MCP via `bin/os-control-mcp` (same as
+  `plugin.json` mcpServers), assert protocol `2025-11-25`, every `tools/list`
+  entry has `title` + `annotations.readOnlyHint`, and T1 `run-python.sh` under
+  thin `PATH=/usr/bin:/bin` (Claude GUI spawn).
+
 ## 2026.6.25
 
 Human-in-the-loop gating + data-driven observe tools (18 → 21 tools).
