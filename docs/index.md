@@ -36,6 +36,14 @@ counterpart to [screen-mcp](https://github.com/88plug/screen-mcp)'s GUI control.
 /mcp
 ```
 
+### Grok Build
+
+```text
+grok plugin marketplace add 88plug/claude-code-plugins
+grok plugin install os-control-mcp@88plug --trust
+```
+
+
 Confirm the `os` server loaded and its tools are listed. No extra setup — it
 uses the host's existing systemd/D-Bus tooling. Call **`os_diag` first**; it
 reports privilege, backends, and safety status.

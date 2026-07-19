@@ -23,6 +23,14 @@ It is the system-service counterpart to [screen-mcp](https://github.com/88plug/s
 /plugin install os-control-mcp@88plug
 ```
 
+### Grok Build
+
+```text
+grok plugin marketplace add 88plug/claude-code-plugins
+grok plugin install os-control-mcp@88plug --trust
+```
+
+
 Confirm the server loaded:
 
 ```text
