@@ -406,6 +406,19 @@ def h_services(a):
 
 _NOUNIT_ACTIONS = {"daemon-reload", "daemon-reexec"}
 
+# Actions whose success the caller actually cares about in terms of the unit's resulting
+# ActiveState, not just the systemctl job's exit code. Root-caused 2026-07-24: `systemctl
+# restart` can exit 0 as soon as the JOB completes even if the unit's process crashes
+# immediately after (a Type=simple crash-after-start, or a forking unit whose PID file never
+# materializes) — h_service used to report "OK" from rc==0 alone with no post-action read.
+_LIFECYCLE_WANT = {
+    "start": "active",
+    "restart": "active",
+    "try-restart": "active",
+    "reload": "active",
+    "stop": "inactive",
+}
+
 
 def h_service(a):
     action = a.get("action")
@@ -457,8 +470,28 @@ def h_service(a):
     )
     if rc != 0:
         return err(f"{action} {' '.join(units)} failed (rc {rc}): {msg}{_priv_hint(e)}")
+    # A clean exit code only means the systemctl JOB completed — it does not mean the unit
+    # ended up in the state the caller actually wanted. Read the real ActiveState back for
+    # lifecycle actions instead of trusting rc alone (see _LIFECYCLE_WANT comment).
+    want = _LIFECYCLE_WANT.get(action)
+    state_note = ""
+    if want and units:
+        mismatches = []
+        for unit in units:
+            _rc2, out2, _e2 = run(base + ["is-active", unit], timeout=8)
+            got = out2.strip()
+            ok_states = {"inactive", "failed"} if want == "inactive" else {want}
+            if got not in ok_states:
+                mismatches.append(f"{unit}={got}")
+        if mismatches:
+            return err(
+                f"{action} {' '.join(units)}: systemctl reported success (rc 0) but the "
+                f"unit did not reach the expected state — {', '.join(mismatches)} "
+                f"(wanted {want}). The service is likely NOT actually {want}."
+            )
+        state_note = f" (confirmed {want})"
     return ok(
-        f"{action} {' '.join(units) or '(manager)'}: OK{(' — ' + msg) if msg else ''}"
+        f"{action} {' '.join(units) or '(manager)'}: OK{state_note}{(' — ' + msg) if msg else ''}"
     )
 
 
@@ -640,8 +673,21 @@ def _verify_reconcile(before, after, expect, journal, pixel):
 
     errors = journal.get("errors", 0) > 0
 
+    # `expect` keys that don't match any unit actually passed to `units` at begin (a
+    # different unit-name spelling, or a unit the caller forgot to list at begin) were
+    # SILENTLY never checked — the loop above only ever visits before.items(), so a
+    # completely-unmatched `expect` left met_list empty for the wrong reason (nothing was
+    # verified, not "nothing matched"), and execution used to fall through to the
+    # os_changed-only branch below, which could report a false CONFIRMED from totally
+    # unrelated activity while the caller's real expectation was never examined at all.
+    unmatched_expect = sorted(set(expect or {}) - set(before)) if expect else []
+
     if met_list:
-        if all(met_list) and not os_failed:
+        if unmatched_expect:
+            # part of `expect` was checked, but part was never checked at all — can't call
+            # the whole expectation CONFIRMED.
+            status = "PARTIAL"
+        elif all(met_list) and not os_failed:
             status = "CONFIRMED"
         elif any(met_list):
             status = "PARTIAL"
@@ -649,6 +695,8 @@ def _verify_reconcile(before, after, expect, journal, pixel):
             status = "NO_OP"
         else:
             status = "DIVERGED"
+    elif unmatched_expect:
+        status = "DIVERGED"
     else:
         if os_failed or errors:
             status = "DIVERGED"
@@ -683,6 +731,7 @@ def _verify_reconcile(before, after, expect, journal, pixel):
         "pixel": None if pixel is None else {"changed": pixel_changed},
         "reconciled": reconciled,
         "cross_layer": cross,
+        "unmatched_expect": unmatched_expect,
     }
 
 
@@ -1141,7 +1190,7 @@ def h_session(a):
     elif op == "list-users":
         rc, out, e = run(["loginctl", "list-users", "--no-pager"], 10)
     elif op == "session-status":
-        if not a.get("id"):
+        if a.get("id") is None:
             return err("op=session-status needs `id`")
         rc, out, e = run(["loginctl", "session-status", "--no-pager", str(a["id"])], 10)
     elif op == "inhibitors":
@@ -1318,7 +1367,16 @@ def h_dbus(a):
         )
     else:
         return err("op must be list|tree|introspect|get-property|set-property|call")
-    if rc != 0 and not out:
+    # The lenient `rc != 0 and not out` check below exists for the READ-ONLY ops, where
+    # busctl can emit partial stdout alongside a benign stderr warning — tolerating that is
+    # correct there. It is NOT correct for the two MUTATING ops (call/set-property, the ones
+    # CLAUDE.md flags as side-effecting): a non-zero exit code there means the requested
+    # D-Bus write did not necessarily take effect, regardless of any stdout leftover, so it
+    # must always be reported as a failure.
+    if op in ("call", "set-property"):
+        if rc != 0:
+            return err(f"busctl {op} failed (rc {rc}): {(e or out).strip()}")
+    elif rc != 0 and not out:
         return err(f"busctl {op} failed (rc {rc}): {e.strip()}")
     return ok(_trunc(out.strip() or "(empty)"))
 
