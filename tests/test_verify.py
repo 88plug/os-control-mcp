@@ -85,7 +85,9 @@ def test_reconcile_unmatched_expect_key_does_not_false_confirm():
     os_changed activity on OTHER units could report a false CONFIRMED without the caller's
     actual expectation ever being checked."""
     before = {"myapp.service": _snap("active")}
-    after = {"myapp.service": _snap("active", "running", nrestarts="1")}  # unrelated change
+    after = {
+        "myapp.service": _snap("active", "running", nrestarts="1")
+    }  # unrelated change
     v = server._verify_reconcile(
         before,
         after,
