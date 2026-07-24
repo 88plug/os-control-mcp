@@ -78,6 +78,43 @@ def test_reconcile_partial_on_mixed_expectations():
     assert v["status"] == "PARTIAL"
 
 
+def test_reconcile_unmatched_expect_key_does_not_false_confirm():
+    """Regression for the code-review finding (2026-07-24): an `expect` key that doesn't
+    match any unit passed to `units` at begin (different spelling, or a unit never listed)
+    used to be silently skipped — met_list stayed empty for the wrong reason, and unrelated
+    os_changed activity on OTHER units could report a false CONFIRMED without the caller's
+    actual expectation ever being checked."""
+    before = {"myapp.service": _snap("active")}
+    after = {
+        "myapp.service": _snap("active", "running", nrestarts="1")
+    }  # unrelated change
+    v = server._verify_reconcile(
+        before,
+        after,
+        {"myapp": "active"},  # spelled without .service -> never matches `before`'s key
+        {"errors": 0, "warnings": 0},
+        None,
+    )
+    assert v["status"] == "DIVERGED"
+    assert v["unmatched_expect"] == ["myapp"]
+
+
+def test_reconcile_unmatched_expect_key_degrades_confirmed_to_partial():
+    """When some expect keys match and are met but others are unmatched, the overall
+    verdict must not be a clean CONFIRMED — part of the expectation was never checked."""
+    before = {"a.service": _snap("active"), "b.service": _snap("active")}
+    after = {"a.service": _snap("inactive", "dead"), "b.service": _snap("active")}
+    v = server._verify_reconcile(
+        before,
+        after,
+        {"a.service": "inactive", "wrong-name": "active"},
+        {"errors": 0, "warnings": 0},
+        None,
+    )
+    assert v["status"] == "PARTIAL"
+    assert v["unmatched_expect"] == ["wrong-name"]
+
+
 def test_cross_layer_mismatch_flags_diverged():
     # OS layer saw nothing, but the GUI changed → invisible divergence.
     before = {"x.service": _snap("active")}

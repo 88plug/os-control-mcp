@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **`os_verify`: fixed a false-CONFIRMED bug.** An `expect` key that didn't match
+  any unit passed to `units` at `begin` (a spelling mismatch, or a unit never
+  listed) was silently never checked — `met_list` stayed empty for the wrong
+  reason, and unrelated activity on other units could then report a false
+  `CONFIRMED` while the caller's actual expectation was never examined. Unmatched
+  keys now surface in the result (`unmatched_expect`) and degrade the verdict to
+  `PARTIAL`/`DIVERGED` instead. 2 new regression tests (`tests/test_verify.py`).
+- **`os_service`: real post-action state check.** start/restart/reload/try-restart/
+  stop now read the unit's actual `ActiveState` back after a successful
+  `systemctl` exit code, instead of trusting the exit code alone — catches a unit
+  that crashes immediately after systemd considers the job done.
+- **`os_dbus`: mutating ops (`call`/`set-property`) now require a clean exit
+  code.** The success/failure check was shared with the read-only ops, where
+  tolerating partial stdout alongside a non-zero exit is correct; for the two
+  ops with side effects that let a failed mutation fall through to success if
+  it emitted any stdout. Now strict for those two.
+- **`os_session`: fixed a falsy-zero bug** where `session-status` with `id=0`
+  was rejected as "missing `id`" (Python truthiness treated `0` as absent).
+
 ## 2026.7.23
 
 - **`os_verify` — cross-layer action verification (read-only, 21 → 22 tools).**
