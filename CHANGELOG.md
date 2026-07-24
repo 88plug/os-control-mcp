@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2026.7.23
 
 - **`os_verify` — cross-layer action verification (read-only, 21 → 22 tools).**
   Bracket an action and reconcile what *actually* happened. `action=begin`

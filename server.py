@@ -590,11 +590,11 @@ def _verify_journal_since(base_j, cursor, units):
         for u in units:
             cmd += ["-u", u]
         rc, out, _ = run(cmd, timeout=12)
-        return [
-            ln for ln in out.splitlines() if ln.strip() and not ln.startswith("--")
-        ]
+        return [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("--")]
 
-    warn_lines = _lines("warning")  # priority <= warning (includes err/crit/alert/emerg)
+    warn_lines = _lines(
+        "warning"
+    )  # priority <= warning (includes err/crit/alert/emerg)
     err_lines = _lines("err")  # priority <= err
     return {
         "errors": len(err_lines),
@@ -719,7 +719,7 @@ def h_verify(a):
                         for u in units
                     },
                     "cursor": bool(cursor),
-                    "note": "perform the action, then call os_verify action=end token=<token> [pixel={\"changed\":bool}]",
+                    "note": 'perform the action, then call os_verify action=end token=<token> [pixel={"changed":bool}]',
                 },
                 indent=2,
             )
@@ -1545,9 +1545,9 @@ TOOLS = [
     },
     {
         "name": "os_verify",
-        "title": "Verify an Action (cross-layer)",
+        "title": "Verify an Action (Cross-Layer)",
         "annotations": _RO,
-        "description": "Bracket an action and reconcile what actually happened at BOTH the OS and (optionally) the GUI layer. action=begin captures a baseline — systemd ActiveState/SubState/NRestarts of `units` plus a journald cursor — and returns an opaque `token`; perform the action with other tools (os_service, a screen-mcp click, a manual step); action=end re-reads and returns a verdict CONFIRMED | PARTIAL | NO_OP | DIVERGED, fusing unit-state change, journald errors since the cursor, `expect` (unit->wanted ActiveState/SubState), and an optional `pixel` change signal {\"changed\":bool} from screen-mcp. Stateless (the token carries the baseline). Read-only. Use it to tell a real success from a no-op over a long task, or to catch a GUI that changed while the service never did.",
+        "description": 'Bracket an action and reconcile what actually happened at BOTH the OS and (optionally) the GUI layer. action=begin captures a baseline — systemd ActiveState/SubState/NRestarts of `units` plus a journald cursor — and returns an opaque `token`; perform the action with other tools (os_service, a screen-mcp click, a manual step); action=end re-reads and returns a verdict CONFIRMED | PARTIAL | NO_OP | DIVERGED, fusing unit-state change, journald errors since the cursor, `expect` (unit->wanted ActiveState/SubState), and an optional `pixel` change signal {"changed":bool} from screen-mcp. Stateless (the token carries the baseline). Read-only. Use it to tell a real success from a no-op over a long task, or to catch a GUI that changed while the service never did.',
         "inputSchema": {
             "type": "object",
             "properties": {
