@@ -8,8 +8,8 @@ description: >-
 
 The sanctioned "motor cortex" for the host: act through systemd / logind / journald / D-Bus, not raw PID hacks.
 
-**Full tool inventory (21):**
-- **Sense:** `os_diag`, `os_services`, `os_journal`, `os_resources`, `os_processes`, `os_pressure`, `os_net`, `os_disk`, `os_hardware`, `os_containers`, `os_sensors`, `os_session`
+**Full tool inventory (22):**
+- **Sense:** `os_diag`, `os_services`, `os_journal`, `os_resources`, `os_processes`, `os_pressure`, `os_net`, `os_disk`, `os_hardware`, `os_containers`, `os_sensors`, `os_session`, `os_verify`
 - **Act:** `os_service`, `os_power`, `os_dbus`, `os_time`, `os_hostname`, `os_locale`, `os_notify`
 - **Confirm / meta:** `os_wait`, `os_reload`
 

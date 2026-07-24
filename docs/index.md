@@ -75,7 +75,7 @@ Drive the host in this order — never mutate blind:
    reachability, HIL/gating status.
 2. **Observe** — read-only tools: `os_services`, `os_journal`, `os_resources`,
    `os_processes`, `os_pressure`, `os_net`, `os_disk`, `os_hardware`,
-   `os_containers`, `os_sensors`, `os_session`.
+   `os_containers`, `os_sensors`, `os_session`, `os_verify`.
 3. **Act** — guarded tools: `os_service`, `os_power`, `os_dbus`, `os_time`,
    `os_hostname`, `os_locale`, `os_notify`.
 4. **Confirm** — `os_wait` and/or re-read status/journal. Do not assume the
@@ -103,6 +103,7 @@ os_diag  →  observe (read-only)  →  act (HIL-gated)  →  os_wait / re-read
 | `os_hardware` | CPU / PCI / USB / **GPU** (nvidia-smi + DRM) inventory |
 | `os_sensors` | Thermal zones (+ `lm_sensors` if present) |
 | `os_session` | logind sessions / users / inhibitors |
+| `os_verify` | Cross-layer action check — `begin` snapshots unit state + a journald cursor → token; `end` returns CONFIRMED / PARTIAL / NO_OP / DIVERGED (fuses unit-state change, journald errors, an `expect` map, and an optional screen-mcp `pixel` signal). Read-only. |
 
 ### Act (guarded)
 

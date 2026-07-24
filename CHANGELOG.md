@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026.7.23
+
+- **`os_verify` — cross-layer action verification (read-only, 21 → 22 tools).**
+  Bracket an action and reconcile what *actually* happened. `action=begin`
+  captures a baseline (systemd `ActiveState`/`SubState`/`NRestarts` of `units` +
+  a journald cursor) and returns an opaque, stateless `token`; perform the action
+  with any tool (`os_service`, a screen-mcp click, a manual step); `action=end`
+  re-reads and returns a verdict — **CONFIRMED / PARTIAL / NO_OP / DIVERGED** —
+  fusing unit-state change, journald errors since the cursor, an `expect`
+  (unit→wanted state), and an optional `pixel` change signal from screen-mcp.
+  The point is the fusion: "the GUI changed but the service never restarted"
+  (`cross_layer: pixel-changed-os-static`) is a verdict only something reading
+  **both** the OS layer and the pixel layer can render — it turns a no-op that
+  looks like success over a long task into an explicit `DIVERGED`. Read-only, no
+  guard/audit, pure stdlib.
+
 ## 2026.7.19
 
 - **Smoke wire path:** drive stdio MCP via `bin/os-control-mcp` (same as

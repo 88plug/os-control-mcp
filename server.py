@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import shlex
 import glob
+import base64
 
 __version__ = "2026.6.25"
 
@@ -535,6 +536,215 @@ def h_journal(a):
     if rc != 0 and not out:
         return err(f"journalctl failed (rc {rc}): {e.strip()}")
     return ok(_trunc(out.strip() or "(no log lines matched)"))
+
+
+# --------------------------------------------------------------------------- #
+# cross-layer action verification (os_verify) — read-only
+# --------------------------------------------------------------------------- #
+# Brackets an action performed by OTHER tools (a GUI click via screen-mcp, an
+# os_service call, a manual step) and reconciles what actually happened at the
+# OS layer — systemd unit state + journald — with the caller's expectation and,
+# optionally, a screen-mcp pixel-change signal. This is the piece no single-layer
+# agent can build: "the GUI changed but the service never restarted" is a verdict
+# only something that reads BOTH layers can render. Stateless: `begin` returns an
+# opaque token carrying the baseline; `end` re-reads and reconciles. Fail-open.
+_VERIFY_SHOW = (
+    "Id",
+    "LoadState",
+    "ActiveState",
+    "SubState",
+    "Result",
+    "ExecMainStatus",
+    "NRestarts",
+)
+
+
+def _verify_show_unit(base, unit):
+    """Structured `systemctl show` snapshot of one unit. Fail-open: {} on error."""
+    rc, out, _ = run(base + ["show", unit, "-p", ",".join(_VERIFY_SHOW)], timeout=8)
+    d = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            d[k] = v
+    return d
+
+
+def _verify_cursor(base_j):
+    """Current journald cursor so `end` reads only lines emitted during the action."""
+    rc, out, e = run(base_j + ["-n0", "--show-cursor"], timeout=8)
+    for line in (out + "\n" + e).splitlines():
+        line = line.strip()
+        if line.startswith("-- cursor:"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _verify_journal_since(base_j, cursor, units):
+    """Count err/warn journal lines since `cursor`, scoped to `units`. Fail-open."""
+
+    def _lines(prio):
+        cmd = base_j + ["--no-pager", "-o", "short", "-p", prio]
+        if cursor:
+            cmd += ["--after-cursor", cursor]
+        for u in units:
+            cmd += ["-u", u]
+        rc, out, _ = run(cmd, timeout=12)
+        return [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("--")]
+
+    warn_lines = _lines(
+        "warning"
+    )  # priority <= warning (includes err/crit/alert/emerg)
+    err_lines = _lines("err")  # priority <= err
+    return {
+        "errors": len(err_lines),
+        "warnings": max(0, len(warn_lines) - len(err_lines)),
+        "sample": (err_lines or warn_lines)[:8],
+    }
+
+
+def _verify_reconcile(before, after, expect, journal, pixel):
+    """Fuse OS-layer change + journald + expectation + optional pixel signal into a
+    verdict: CONFIRMED | PARTIAL | NO_OP | DIVERGED. Pure function — unit-testable."""
+    units = {}
+    os_changed = False
+    os_failed = False
+    met_list = []
+    for u, b in before.items():
+        a = after.get(u, {})
+        changed = (
+            b.get("ActiveState") != a.get("ActiveState")
+            or b.get("SubState") != a.get("SubState")
+            or b.get("NRestarts") != a.get("NRestarts")
+        )
+        failed = a.get("ActiveState") == "failed" or a.get("Result") not in (
+            None,
+            "",
+            "success",
+        )
+        os_changed = os_changed or changed
+        os_failed = os_failed or failed
+        entry = {
+            "before": f"{b.get('ActiveState', '?')}/{b.get('SubState', '?')}",
+            "after": f"{a.get('ActiveState', '?')}/{a.get('SubState', '?')}",
+            "changed": changed,
+            "failed": failed,
+        }
+        if expect and u in expect:
+            want = expect[u]
+            met = a.get("ActiveState") == want or a.get("SubState") == want
+            entry["expected"] = want
+            entry["met"] = met
+            met_list.append(met)
+        units[u] = entry
+
+    errors = journal.get("errors", 0) > 0
+
+    if met_list:
+        if all(met_list) and not os_failed:
+            status = "CONFIRMED"
+        elif any(met_list):
+            status = "PARTIAL"
+        elif not os_changed and not errors:
+            status = "NO_OP"
+        else:
+            status = "DIVERGED"
+    else:
+        if os_failed or errors:
+            status = "DIVERGED"
+        elif os_changed:
+            status = "CONFIRMED"
+        else:
+            status = "NO_OP"
+
+    # cross-layer reconciliation — the uniquely-ours signal
+    reconciled = None
+    cross = None
+    pixel_changed = None
+    if pixel is not None:
+        pixel_changed = bool(pixel.get("changed"))
+        reconciled = pixel_changed == os_changed
+        if not reconciled:
+            cross = (
+                "pixel-changed-os-static"
+                if pixel_changed
+                else "os-changed-pixel-static"
+            )
+            # GUI moved but the OS layer is silent → a real, otherwise-invisible divergence
+            if status == "NO_OP" and pixel_changed:
+                status = "DIVERGED"
+
+    return {
+        "status": status,
+        "os_changed": os_changed,
+        "os_failed": os_failed,
+        "units": units,
+        "journal": journal,
+        "pixel": None if pixel is None else {"changed": pixel_changed},
+        "reconciled": reconciled,
+        "cross_layer": cross,
+    }
+
+
+def h_verify(a):
+    action = a.get("action")
+    if action not in ("begin", "end"):
+        return err("os_verify needs action=begin|end")
+    scope = a.get("scope", "system")
+
+    if action == "begin":
+        units = a.get("units") or []
+        if not isinstance(units, list) or not units:
+            return err("os_verify begin needs `units` (non-empty list)")
+        base, _ = _sc(scope, False)
+        base_j = ["journalctl"] + (["--user"] if scope == "user" else [])
+        before = {u: _verify_show_unit(base, u) for u in units}
+        cursor = _verify_cursor(base_j)
+        token = {
+            "v": 1,
+            "scope": scope,
+            "units": units,
+            "before": before,
+            "cursor": cursor,
+            "expect": a.get("expect") or {},
+            "ts": time.time(),
+        }
+        blob = base64.b64encode(json.dumps(token).encode()).decode()
+        return ok(
+            json.dumps(
+                {
+                    "token": blob,
+                    "captured": {
+                        u: f"{before[u].get('ActiveState', '?')}/{before[u].get('SubState', '?')}"
+                        for u in units
+                    },
+                    "cursor": bool(cursor),
+                    "note": 'perform the action, then call os_verify action=end token=<token> [pixel={"changed":bool}]',
+                },
+                indent=2,
+            )
+        )
+
+    # action == "end"
+    blob = a.get("token")
+    if not blob:
+        return err("os_verify end needs `token` from a prior begin")
+    try:
+        token = json.loads(base64.b64decode(blob).decode())
+    except Exception:
+        return err("os_verify: malformed token")
+    scope = token.get("scope", scope)
+    base, _ = _sc(scope, False)
+    base_j = ["journalctl"] + (["--user"] if scope == "user" else [])
+    units = token.get("units", [])
+    before = token.get("before", {})
+    after = {u: _verify_show_unit(base, u) for u in units}
+    journal = _verify_journal_since(base_j, token.get("cursor", ""), units)
+    verdict = _verify_reconcile(
+        before, after, token.get("expect") or {}, journal, a.get("pixel")
+    )
+    verdict["elapsed_s"] = round(time.time() - token.get("ts", time.time()), 2)
+    return ok(json.dumps(verdict, indent=2))
 
 
 # --------------------------------------------------------------------------- #
@@ -1334,6 +1544,24 @@ TOOLS = [
         },
     },
     {
+        "name": "os_verify",
+        "title": "Verify an Action (Cross-Layer)",
+        "annotations": _RO,
+        "description": 'Bracket an action and reconcile what actually happened at BOTH the OS and (optionally) the GUI layer. action=begin captures a baseline — systemd ActiveState/SubState/NRestarts of `units` plus a journald cursor — and returns an opaque `token`; perform the action with other tools (os_service, a screen-mcp click, a manual step); action=end re-reads and returns a verdict CONFIRMED | PARTIAL | NO_OP | DIVERGED, fusing unit-state change, journald errors since the cursor, `expect` (unit->wanted ActiveState/SubState), and an optional `pixel` change signal {"changed":bool} from screen-mcp. Stateless (the token carries the baseline). Read-only. Use it to tell a real success from a no-op over a long task, or to catch a GUI that changed while the service never did.',
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["begin", "end"]},
+                "units": {"type": "array", "items": {"type": "string"}},
+                "expect": {"type": "object"},
+                "token": {"type": "string"},
+                "pixel": {"type": "object"},
+                "scope": _SCOPE,
+            },
+            "required": ["action"],
+        },
+    },
+    {
         "name": "os_resources",
         "title": "Resource Snapshot",
         "annotations": _RO,
@@ -1574,6 +1802,7 @@ HANDLERS = {
     "os_services": h_services,
     "os_service": h_service,
     "os_wait": h_wait,
+    "os_verify": h_verify,
     "os_journal": h_journal,
     "os_resources": h_resources,
     "os_processes": h_processes,

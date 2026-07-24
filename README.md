@@ -108,6 +108,7 @@ os_diag  →  observe (read-only)  →  act (HIL-gated)  →  os_wait / re-read
 | `os_hardware` | cpu/pci/usb/**gpu** (nvidia-smi + DRM) inventory |
 | `os_sensors` | Thermal-zone temperatures (+ `lm_sensors` if present) |
 | `os_session` | Logind sessions / users / **inhibitors** |
+| `os_verify` | **Cross-layer action check.** `begin` snapshots unit state + a journald cursor → opaque token; do the action; `end` returns **CONFIRMED / PARTIAL / NO_OP / DIVERGED**, fusing unit-state change, journald errors, an `expect` map, and an optional screen-mcp `pixel` signal. Catches a no-op that looks like success, and a GUI that moved while the service didn't. |
 
 ### Act (guarded)
 
