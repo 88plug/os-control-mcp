@@ -20,10 +20,35 @@ makes long-horizon work survivable. This skill encodes the loop:
    `token`.
 2. **Perform the action** with whatever tool does it — a `screen_click` on the GUI
    button, an `os_service` restart, a manual step.
-3. **Read the pixel sense** (only if a GUI was involved): call **`screen_sense`** right
-   after the action. It returns `{"pixel": {changed, opened, modal, no_op, activity}}`.
+3. **Read the pixel signal** (only if a GUI was involved). Two options:
+   - **`screen_verify`** — preferred. It *polls* until the screen settles or a timeout,
+     grades the GUI itself (`CONFIRMED`/`PARTIAL`/`NO_OP`/`DIVERGED`), and returns a
+     `pixel` block ready to hand straight to step 4. Takes `expect_text` / `expect_gone`
+     / `expect_change`, so you can assert the button's effect rather than just "something
+     moved". Use this when the GUI effect may take a moment to appear.
+   - **`screen_sense`** — passive. Returns `{"pixel": {changed, opened, modal, no_op,
+     activity}}` for whatever the *last* action already left behind, with no waiting. Use
+     it when the action is known to be instantaneous, or when you have already screenshotted.
 4. **`os_verify` `action=end`** — pass the `token` and, if you have one, `pixel=<the
-   object from screen_sense>`. It re-reads systemd + journald and returns the verdict.
+   `pixel` object from screen_verify or screen_sense>`. It re-reads systemd + journald
+   and returns the verdict.
+
+Both emit the same `{"changed": bool, ...}` contract; `os_verify` reads `changed` and
+ignores the rest, so either is safe to pass.
+
+### Worked example (verified live)
+
+```
+os_verify   action=begin  units=["dbus.service"]        -> token
+screen_click / os_service / manual step
+screen_verify expect_change=true region=[...]           -> {"verdict":"CONFIRMED","pixel":{"changed":true}}
+os_verify   action=end    token=<token> pixel={"changed":true}
+```
+
+A GUI-only action (a hover) against an untouched unit returns
+`status: DIVERGED`, `cross_layer: "pixel-changed-os-static"`, `reconciled: false`.
+An inert action on both layers returns `status: NO_OP`, `reconciled: true`,
+`cross_layer: null`. Both quadrants were exercised end-to-end against a live desktop.
 
 ## Reading the verdict
 
